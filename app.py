@@ -669,6 +669,10 @@ def show_ai_assistant():
     else:
         st.error("❌ AI Assistant not configured. Please update the API key in ai_assistant.py")
     
+    # Custom GPT Button
+    st.markdown("### 🚀 Try Our Custom GPT")
+    st.markdown(ai_assistant.get_custom_gpt_button(), unsafe_allow_html=True)
+    
     # Chat interface
     st.markdown("### 💬 Chat with AI Assistant")
     
