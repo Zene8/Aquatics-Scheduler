@@ -17,9 +17,7 @@ def login_form():
                 </h1>
                 <p style="opacity: 0.8; margin-bottom: 2rem;">Intelligent Swim Lesson Scheduling for YMCA Sammamish Aquatics Center</p>
                 
-                <div style="font-size: 3rem; margin-bottom: 1rem;">🔐</div>
-                <h3 style="color: #00d4ff; margin-bottom: 2rem;">Supervisor Login</h3>
-            </div>
+                
         </div>
     """, unsafe_allow_html=True)
     
