@@ -1,0 +1,45 @@
+[
+  {
+    "name": "ruhan",
+    "role": "Instructor",
+    "cant_teach": [
+      "Starters",
+      "P1",
+      "P2",
+      "P3"
+    ],
+    "default_start_time": "08:05:00",
+    "default_end_time": "12:40:00"
+  },
+  {
+    "name": "erika",
+    "role": "Instructor",
+    "cant_teach": [
+      "STRK6",
+      "CNDTNG"
+    ],
+    "default_start_time": "08:05:00",
+    "default_end_time": "12:40:00"
+  },
+  {
+    "name": "taylr",
+    "role": "Instructor",
+    "cant_teach": [
+      "P1",
+      "P2",
+      "P3"
+    ],
+    "default_start_time": "08:05:00",
+    "default_end_time": "12:40:00"
+  },
+  {
+    "name": "artem",
+    "role": "Instructor",
+    "cant_teach": [
+      "Starters",
+      "P1"
+    ],
+    "default_start_time": "08:05:00",
+    "default_end_time": "12:40:00"
+  }
+]
