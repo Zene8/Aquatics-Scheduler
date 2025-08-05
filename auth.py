@@ -5,7 +5,8 @@ from ui_components import load_css, create_header, create_success_message, creat
 
 def login_form():
     """Enhanced login form with futuristic styling"""
-    load_css()
+    # Temporarily disable CSS loading to test
+    # load_css()
     
     # Create a simple, clean login container
     st.markdown("""
