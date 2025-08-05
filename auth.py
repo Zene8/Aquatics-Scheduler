@@ -7,21 +7,17 @@ def login_form():
     """Enhanced login form with futuristic styling"""
     load_css()
     
-    # Create a centered login container
+    # Create a simple, clean login container
     st.markdown("""
         <div style="display: flex; justify-content: center; align-items: center; min-height: 80vh;">
-            <div class="futuristic-card" style="width: 400px; text-align: center;">
-                <div style="margin-bottom: 2rem;">
-                    <h1 style="color: #00d4ff; font-family: 'Orbitron', monospace; margin-bottom: 0.5rem;">
-                        🏊‍♂️ AQUA SCHEDULER PRO
-                    </h1>
-                    <p style="opacity: 0.8; margin: 0;">Intelligent Swim Lesson Scheduling for YMCA Sammamish Aquatics Center</p>
-                </div>
+            <div class="futuristic-card" style="width: 400px; text-align: center; padding: 2rem;">
+                <h1 style="color: #00d4ff; font-family: 'Orbitron', monospace; margin-bottom: 1rem;">
+                    🏊‍♂️ AQUA SCHEDULER PRO
+                </h1>
+                <p style="opacity: 0.8; margin-bottom: 2rem;">Intelligent Swim Lesson Scheduling for YMCA Sammamish Aquatics Center</p>
                 
-                <div style="margin-bottom: 1rem;">
-                    <div style="font-size: 3rem; margin-bottom: 1rem;">🔐</div>
-                    <h3 style="color: #00d4ff; margin-bottom: 1rem;">Supervisor Login</h3>
-                </div>
+                <div style="font-size: 3rem; margin-bottom: 1rem;">🔐</div>
+                <h3 style="color: #00d4ff; margin-bottom: 2rem;">Supervisor Login</h3>
             </div>
         </div>
     """, unsafe_allow_html=True)
