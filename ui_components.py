@@ -224,13 +224,14 @@ def create_navigation_tabs():
     return tab1, tab2, tab3, tab4
 
 def create_sidebar_menu():
-    """Create sidebar menu with futuristic styling using buttons"""
+    """Create sidebar menu with futuristic styling using radio buttons"""
     st.sidebar.markdown("""
         <div style="text-align: center; padding: 1rem;">
             <h3 style="color: #00d4ff; font-family: 'Orbitron', monospace;">NAVIGATION</h3>
         </div>
     """, unsafe_allow_html=True)
     
+    # Use radio buttons for navigation to prevent rerun issues
     menu_options = {
         "🏠 Dashboard": "dashboard",
         "📅 Schedule Generator": "schedule",
@@ -241,17 +242,23 @@ def create_sidebar_menu():
         "❓ Help": "help"
     }
     
-    # Create buttons for each menu option
-    selected = None
-    for display_name, option_value in menu_options.items():
-        if st.sidebar.button(display_name, key=f"nav_{option_value}", use_container_width=True):
-            selected = option_value
+    # Initialize session state for navigation if not exists
+    if 'current_nav' not in st.session_state:
+        st.session_state.current_nav = "dashboard"
     
-    # If no button was clicked, default to dashboard
-    if selected is None:
-        selected = "dashboard"
+    # Create radio buttons for navigation
+    selected = st.sidebar.radio(
+        "Navigation",
+        options=list(menu_options.keys()),
+        index=list(menu_options.keys()).index([k for k, v in menu_options.items() if v == st.session_state.current_nav][0]),
+        label_visibility="collapsed",
+        key="nav_radio"
+    )
     
-    return selected
+    # Update session state
+    st.session_state.current_nav = menu_options[selected]
+    
+    return st.session_state.current_nav
 
 def create_footer():
     """Create a futuristic footer"""

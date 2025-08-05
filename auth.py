@@ -9,7 +9,7 @@ def login_form():
     
     # Create a centered login container
     st.markdown("""
-        <div style="display: flex; justify-content: center; align-items: center; min-height: 100vh;">
+        <div style="display: flex; justify-content: center; align-items: center; min-height: 80vh;">
             <div class="futuristic-card" style="width: 400px; text-align: center;">
                 <div style="margin-bottom: 2rem;">
                     <h1 style="color: #00d4ff; font-family: 'Orbitron', monospace; margin-bottom: 0.5rem;">
