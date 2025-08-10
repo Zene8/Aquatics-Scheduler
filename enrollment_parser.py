@@ -29,7 +29,7 @@ class EnrollmentParser:
             
             # Teen/Adult
             "Teen / Adult Swim Basics": "TN/AD BSCS",
-            "Teen / Adult Swim Strokes": "TN/AD STRKS",
+            "Teen / Adult Swim Strokes": "TN/ AD STRKS",
             
             # Conditioning
             "Aquatic Conditioning Swim Team Prep": "CNDTNG"
@@ -59,7 +59,36 @@ class EnrollmentParser:
             for _, row in df.iterrows():
                 # Check if this row is for the target day
                 day_of_week = str(row.get('Day of Week', '')).strip()
-                if not day_of_week or target_day not in day_of_week:
+                if not day_of_week:
+                    continue
+                
+                # More precise day matching - check if target day is in the day list
+                day_list = [day.strip() for day in day_of_week.split(',')]
+                print(f"Target day: {target_day}, Available days: {day_list}")
+                if target_day not in day_list:
+                    continue
+                
+                # Check course start date and duration
+                course_start_date_str = str(row.get('Course Start Date', '')).strip()
+                if not course_start_date_str or course_start_date_str == 'nan':
+                    continue
+                
+                try:
+                    course_start_date = pd.to_datetime(course_start_date_str).date()
+                    
+                    # Determine course duration based on day of week
+                    if 'Saturday' in day_list:
+                        # Saturday classes run for 8 weeks
+                        course_end_date = course_start_date + timedelta(weeks=8)
+                    else:
+                        # Weekday classes run for 4 weeks
+                        course_end_date = course_start_date + timedelta(weeks=4)
+                    
+                    # Check if target date falls within the course period
+                    if not (course_start_date <= target_date <= course_end_date):
+                        continue
+                        
+                except (ValueError, TypeError):
                     continue
                 
                 # Get course name and map to class type
@@ -111,6 +140,7 @@ class EnrollmentParser:
                 except (ValueError, IndexError):
                     continue
             
+            print(f"Found {len(classes)} group classes for {target_date} ({target_day}) in {session_mode} mode")
             return classes
             
         except Exception as e:
@@ -146,8 +176,9 @@ class EnrollmentParser:
                     include_lesson = False
                     
                     if course_option == "Private Swim Lessons":
-                        # Direct date match
-                        if start_date == target_date:
+                        # Check if target date falls within 4 weeks of start date
+                        course_end_date = start_date + timedelta(weeks=4)
+                        if start_date <= target_date <= course_end_date:
                             include_lesson = True
                     elif course_option == "Swim Lessons - Private Package (4 pack)":
                         # Check if it's 0, 7, 14, or 21 days after start date
@@ -205,6 +236,7 @@ class EnrollmentParser:
                 except (ValueError, TypeError):
                     continue
             
+            print(f"Found {len(private_lessons)} private lessons for {target_date} in {session_mode} mode")
             return private_lessons
             
         except Exception as e:

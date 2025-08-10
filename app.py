@@ -255,6 +255,7 @@ def show_schedule_generator():
                                 # Set template generated flag for enrollment mode
                                 st.session_state['template_generated'] = True
                                 st.session_state['enrollment_mode'] = True
+                                st.session_state['am_template_file'] = "assets/Blank_MTWT_Template1.xlsx"
                                 
                                 create_success_message(f"Schedule template generated successfully for {schedule_date.strftime('%A, %B %d, %Y')}!")
                                 
@@ -272,9 +273,13 @@ def show_schedule_generator():
                                 with col3:
                                     st.metric("Total Students", sum(c['enrollment'] for c in group_classes) + len(private_lessons))
                                 
-                                if st.button("Continue to Step 2", type="primary"):
-                                    st.session_state.current_step = 2
-                                    st.rerun()
+                                # Show continue button only if template was generated
+                                if st.session_state.get('template_generated', False):
+                                    if st.button("Continue to Step 2", type="primary"):
+                                        # Clear the template_generated flag to prevent issues
+                                        st.session_state['template_generated'] = False
+                                        st.session_state.current_step = 2
+                                        st.rerun()
                             else:
                                 create_error_message("Failed to generate schedule template. Please check your files and try again.")
                                 
