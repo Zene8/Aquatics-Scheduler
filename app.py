@@ -234,7 +234,7 @@ def show_schedule_generator():
                             
                             # Parse enrollment data
                             group_classes = parser.parse_group_lessons(group_path.name, schedule_date, session_mode)
-                            private_lessons = parser.parse_private_lessons(private_path.name, schedule_date)
+                            private_lessons = parser.parse_private_lessons(private_path.name, schedule_date, session_mode)
                             
                             # Generate template
                             success = parser.generate_schedule_template(group_classes, private_lessons, session_mode)
@@ -251,6 +251,10 @@ def show_schedule_generator():
                                 # Generate preview
                                 preview_df = parser.get_template_preview(group_classes, private_lessons, session_mode)
                                 st.session_state['am_template_df'] = preview_df
+                                
+                                # Set template generated flag for enrollment mode
+                                st.session_state['template_generated'] = True
+                                st.session_state['enrollment_mode'] = True
                                 
                                 create_success_message(f"Schedule template generated successfully for {schedule_date.strftime('%A, %B %d, %Y')}!")
                                 

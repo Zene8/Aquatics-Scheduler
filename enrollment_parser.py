@@ -117,7 +117,7 @@ class EnrollmentParser:
             print(f"Error parsing group lessons: {e}")
             return []
     
-    def parse_private_lessons(self, file_path, target_date):
+    def parse_private_lessons(self, file_path, target_date, session_mode):
         """Parse private lessons Excel file and extract classes for the target date"""
         try:
             df = pd.read_excel(file_path)
@@ -133,6 +133,7 @@ class EnrollmentParser:
             for _, row in df.iterrows():
                 course_option = str(row.get('Course Option', '')).strip()
                 start_date_str = str(row.get('Start Date', '')).strip()
+                start_time_str = str(row.get('Start Time', '')).strip()
                 
                 if not start_date_str or start_date_str == 'nan':
                     continue
@@ -155,14 +156,51 @@ class EnrollmentParser:
                             include_lesson = True
                     
                     if include_lesson:
-                        first_name = str(row.get('First Name', '')).strip()
-                        age = str(row.get('Age', '')).strip()
-                        
-                        private_lessons.append({
-                            'first_name': first_name,
-                            'age': age,
-                            'start_date': start_date
-                        })
+                        # Check if start time is in the correct session
+                        if start_time_str and start_time_str != 'nan':
+                            try:
+                                # Parse time and check session
+                                if ':' in start_time_str:
+                                    time_parts = start_time_str.split(':')
+                                    hour_str = time_parts[0].strip()
+                                    minute_str = time_parts[1].split()[0].strip() if ' ' in time_parts[1] else time_parts[1].strip()
+                                    
+                                    hour = int(hour_str)
+                                    minute = int(minute_str)
+                                    
+                                    # Convert to 24-hour format if needed
+                                    if 'PM' in start_time_str.upper() and hour != 12:
+                                        hour += 12
+                                    elif 'AM' in start_time_str.upper() and hour == 12:
+                                        hour = 0
+                                    
+                                    # Check if time is in the correct session
+                                    if session_mode == "AM":
+                                        # AM session: 8:20-12:45
+                                        if 8 <= hour <= 12:
+                                            first_name = str(row.get('First Name', '')).strip()
+                                            age = str(row.get('Age', '')).strip()
+                                            
+                                            private_lessons.append({
+                                                'first_name': first_name,
+                                                'age': age,
+                                                'start_date': start_date,
+                                                'start_time': f"{hour:02d}:{minute:02d}"
+                                            })
+                                    elif session_mode == "PM":
+                                        # PM session: 3:45-8:00
+                                        if hour >= 15 or hour < 8:
+                                            first_name = str(row.get('First Name', '')).strip()
+                                            age = str(row.get('Age', '')).strip()
+                                            
+                                            private_lessons.append({
+                                                'first_name': first_name,
+                                                'age': age,
+                                                'start_date': start_date,
+                                                'start_time': f"{hour:02d}:{minute:02d}"
+                                            })
+                            except (ValueError, IndexError):
+                                continue
                         
                 except (ValueError, TypeError):
                     continue
@@ -218,22 +256,25 @@ class EnrollmentParser:
                     col = header_to_col[class_type]
                     ws.cell(row=time_row, column=col, value=enrollment)
             
-            # Process private lessons
+            # Process private lessons with time-based placement
             if private_lessons and 'PSL' in header_to_col:
                 psl_col = header_to_col['PSL']
                 
-                # Group private lessons by time (we'll distribute them across time slots)
-                for i, lesson in enumerate(private_lessons):
-                    # Distribute across available time slots
-                    time_row = (i % len(time_slots)) + 2
-                    if time_row <= ws.max_row:
-                        current_value = ws.cell(row=time_row, column=psl_col).value
-                        if current_value:
-                            # Append to existing value
-                            new_value = f"{current_value}; {lesson['first_name']} ({lesson['age']})"
-                        else:
-                            new_value = f"{lesson['first_name']} ({lesson['age']})"
-                        ws.cell(row=time_row, column=psl_col, value=new_value)
+                # Group private lessons by their actual start times
+                psl_by_time = {}
+                for lesson in private_lessons:
+                    start_time = lesson.get('start_time', '')
+                    if start_time in time_slots:
+                        if start_time not in psl_by_time:
+                            psl_by_time[start_time] = []
+                        psl_by_time[start_time].append(f"{lesson['first_name']} ({lesson['age']})")
+                
+                # Place private lessons at their actual times
+                for time_slot in time_slots:
+                    if time_slot in psl_by_time:
+                        time_row = time_slots.index(time_slot) + 2
+                        if time_row <= ws.max_row:
+                            ws.cell(row=time_row, column=psl_col, value='; '.join(psl_by_time[time_slot]))
             
             # Save the template
             wb.save(template_path)
@@ -246,16 +287,18 @@ class EnrollmentParser:
     def get_template_preview(self, group_classes, private_lessons, session_mode):
         """Generate a preview of the schedule template"""
         try:
-            # Create a preview DataFrame
+            # Create a preview DataFrame with all standard columns
             time_slots = self.am_times if session_mode == "AM" else self.pm_times
             
-            # Get all unique class types from the mapping
-            all_class_types = list(set(self.class_mapping.values())) + ['PSL']
+            # Define all columns in the correct order (matching template format)
+            all_columns = [
+                'Time', 'Starters', 'P1', 'P2', 'P3', 'Y1', 'Y2', 'Y3', 'PSL',
+                'STRK4', 'STRK5', 'STRK6', 'TN/AD BSCS', 'TN/AD STRKS', 'CNDTNG', 'brk'
+            ]
             
             # Create DataFrame
-            preview_data = {'Time': time_slots}
-            for class_type in all_class_types:
-                preview_data[class_type] = [''] * len(time_slots)
+            preview_data = {col: [''] * len(time_slots) for col in all_columns}
+            preview_data['Time'] = time_slots
             
             # Fill in group classes
             for class_info in group_classes:
@@ -267,15 +310,22 @@ class EnrollmentParser:
                     time_idx = time_slots.index(start_time)
                     preview_data[class_type][time_idx] = enrollment
             
-            # Fill in private lessons
+            # Fill in private lessons with time-based distribution
             if private_lessons:
-                for i, lesson in enumerate(private_lessons):
-                    time_idx = i % len(time_slots)
-                    current_value = preview_data['PSL'][time_idx]
-                    if current_value:
-                        preview_data['PSL'][time_idx] = f"{current_value}; {lesson['first_name']} ({lesson['age']})"
-                    else:
-                        preview_data['PSL'][time_idx] = f"{lesson['first_name']} ({lesson['age']})"
+                # Group private lessons by time
+                psl_by_time = {}
+                for lesson in private_lessons:
+                    start_time = lesson.get('start_time', '')
+                    if start_time in time_slots:
+                        if start_time not in psl_by_time:
+                            psl_by_time[start_time] = []
+                        psl_by_time[start_time].append(f"{lesson['first_name']} ({lesson['age']})")
+                
+                # Fill PSL column based on actual times
+                for time_slot in time_slots:
+                    if time_slot in psl_by_time:
+                        time_idx = time_slots.index(time_slot)
+                        preview_data['PSL'][time_idx] = '; '.join(psl_by_time[time_slot])
             
             return pd.DataFrame(preview_data)
             
