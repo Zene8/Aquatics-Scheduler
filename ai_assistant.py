@@ -15,6 +15,7 @@ class AIAssistant:
         You are an AI assistant for a swim instructor scheduling application. The app helps supervisors create schedules for swim lessons.
 
         APP FEATURES:
+        - Enrollment Upload (RECOMMENDED): Upload enrollment Excel files to automatically generate schedules from actual enrollment data
         - Template Mode: Upload existing Excel templates with class schedules
         - Manual Mode: Create schedules by selecting classes for each time slot
         - AM/PM Sessions: Different time slots for morning and afternoon
@@ -51,6 +52,7 @@ class AIAssistant:
     def get_help_tip(self, context: str, current_step: int = None) -> str:
         """Get contextual help tip based on current app state"""
         tips = {
+            "enrollment_upload": "🏆 **Recommended**: Upload enrollment Excel files to automatically generate your schedule! This method reads actual enrollment data and creates the most accurate schedule template.",
             "template_upload": "📋 **Tip**: Upload an Excel file with existing class schedules. The app will try to keep the same instructors for the same classes.",
             "manual_selection": "🎯 **Tip**: Click on time slots to select which classes run at each time. Only selected classes will be scheduled.",
             "instructor_entry": "👥 **Tip**: You can select from saved profiles or type new names. Set availability times and mark classes they can't teach.",

@@ -9,8 +9,15 @@ import numpy as np
 
 def load_css():
     """Load custom CSS for futuristic styling"""
-    with open('assets/style.css') as f:
-        st.markdown(f'<style>{f.read()}</style>', unsafe_allow_html=True)
+    try:
+        with open('assets/style.css', 'r', encoding='utf-8') as f:
+            css_content = f.read()
+            if css_content.strip():  # Only load if CSS file has content
+                st.markdown(f'<style>{css_content}</style>', unsafe_allow_html=True)
+    except FileNotFoundError:
+        st.error("CSS file not found")
+    except Exception as e:
+        st.error(f"Error loading CSS: {e}")
 
 def create_header():
     """Create the main header with futuristic styling"""

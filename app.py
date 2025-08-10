@@ -14,6 +14,7 @@ import os
 from openpyxl import load_workbook, Workbook, styles
 from shutil import copyfile
 from ai_assistant import ai_assistant
+from enrollment_parser import EnrollmentParser
 
 # Page Configuration
 st.set_page_config(
@@ -163,11 +164,125 @@ def show_schedule_generator():
         
         method = st.radio(
             "Choose Input Method",
-            ["Upload Template", "Select Classes Manually"],
+            ["Upload Enrollments XCEL 🏆", "Upload Template", "Select Classes Manually"],
             horizontal=True
         )
 
-        if method == "Upload Template":
+        if method == "Upload Enrollments XCEL 🏆":
+            st.markdown("### 📊 Upload Enrollment Data")
+            st.markdown("**Recommended Method**: Upload enrollment Excel files to automatically generate your schedule template.")
+            
+            # Show contextual help
+            help_tip = ai_assistant.get_help_tip("enrollment_upload")
+            st.info(help_tip)
+            
+            # Date selection
+            schedule_date = st.date_input(
+                "Select Schedule Date",
+                value=datetime.now().date(),
+                help="Choose the date for which you want to generate the schedule"
+            )
+            
+            # Session mode selection
+            session_mode = st.radio(
+                "Session Mode",
+                ["AM", "PM"],
+                horizontal=True,
+                help="AM: 8:35-12:10, PM: 4:10-7:05"
+            )
+            st.session_state['session_mode'] = session_mode
+            
+            # File uploads
+            st.markdown("#### 📁 Upload Enrollment Files")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("**Group Lessons** (Required)")
+                group_file = st.file_uploader(
+                    "Upload Group Lessons Excel",
+                    type=["xlsx"],
+                    key="group_lessons",
+                    help="Upload the group lessons enrollment file"
+                )
+            
+            with col2:
+                st.markdown("**Private Lessons** (Required)")
+                private_file = st.file_uploader(
+                    "Upload Private Lessons Excel", 
+                    type=["xlsx"],
+                    key="private_lessons",
+                    help="Upload the private lessons enrollment file"
+                )
+            
+            # Process files when both are uploaded
+            if group_file and private_file:
+                if st.button("🚀 Generate Schedule from Enrollments", type="primary"):
+                    with st.spinner("Processing enrollment data..."):
+                        try:
+                            # Initialize parser
+                            parser = EnrollmentParser()
+                            
+                            # Save uploaded files temporarily
+                            group_path = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
+                            group_path.write(group_file.read())
+                            group_path.close()
+                            
+                            private_path = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
+                            private_path.write(private_file.read())
+                            private_path.close()
+                            
+                            # Parse enrollment data
+                            group_classes = parser.parse_group_lessons(group_path.name, schedule_date, session_mode)
+                            private_lessons = parser.parse_private_lessons(private_path.name, schedule_date)
+                            
+                            # Generate template
+                            success = parser.generate_schedule_template(group_classes, private_lessons, session_mode)
+                            
+                            if success:
+                                # Store data for next steps
+                                st.session_state['enrollment_data'] = {
+                                    'group_classes': group_classes,
+                                    'private_lessons': private_lessons,
+                                    'schedule_date': schedule_date,
+                                    'session_mode': session_mode
+                                }
+                                
+                                # Generate preview
+                                preview_df = parser.get_template_preview(group_classes, private_lessons, session_mode)
+                                st.session_state['am_template_df'] = preview_df
+                                
+                                create_success_message(f"Schedule template generated successfully for {schedule_date.strftime('%A, %B %d, %Y')}!")
+                                
+                                # Show preview
+                                st.markdown("#### 📋 Generated Schedule Preview")
+                                st.dataframe(preview_df, height=300)
+                                
+                                # Show summary
+                                st.markdown("#### 📊 Summary")
+                                col1, col2, col3 = st.columns(3)
+                                with col1:
+                                    st.metric("Group Classes", len(group_classes))
+                                with col2:
+                                    st.metric("Private Lessons", len(private_lessons))
+                                with col3:
+                                    st.metric("Total Students", sum(c['enrollment'] for c in group_classes) + len(private_lessons))
+                                
+                                if st.button("Continue to Step 2", type="primary"):
+                                    st.session_state.current_step = 2
+                                    st.rerun()
+                            else:
+                                create_error_message("Failed to generate schedule template. Please check your files and try again.")
+                                
+                        except Exception as e:
+                            create_error_message(f"Error processing enrollment data: {str(e)}")
+                            st.error(f"Technical details: {str(e)}")
+            
+            # Clean up temporary files
+            elif group_file or private_file:
+                st.warning("Please upload both group lessons and private lessons files to proceed.")
+
+        elif method == "Upload Template":
             # Add session mode selection for template mode too
             session_mode = st.radio(
                 "Session Mode",
