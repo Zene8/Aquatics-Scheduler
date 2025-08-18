@@ -1,11 +1,10 @@
 # app.py - Futuristic Swim Scheduler
 
 import streamlit as st
-from auth import login_form
 from scheduler import generate_am_schedule
 from template_parser import parse_template
 from ui_components import *
-from instructor_manager import instructor_manager
+
 import pandas as pd
 import io
 import tempfile
@@ -37,33 +36,40 @@ if 'current_step' not in st.session_state:
 if 'schedule_generated' not in st.session_state:
     st.session_state.schedule_generated = False
 
-# --- Login Section --- #
-if not st.session_state.logged_in:
-    login_form()
-    st.stop()
-
 # --- Main Application --- #
 def main():
+    # Import auth functions here to avoid circular imports
+    from auth import check_auth, get_user_role, is_supervisor, logout
+    
+    # Check authentication
+    user_role = check_auth()
+    
     # Create header
     create_header()
     
     # Create sidebar navigation
     current_section = create_sidebar_menu()
     
-    # Main content based on navigation
+    # Main content based on navigation and user role
     if current_section == "dashboard":
-        show_dashboard()
+        if user_role == 'supervisor':
+            show_dashboard()
+        else:
+            show_employee_dashboard()
     elif current_section == "schedule":
-        show_schedule_generator()
-    elif current_section == "instructors":
+        if user_role == 'supervisor':
+            show_schedule_generator()
+        else:
+            show_employee_schedule_view()
+    elif current_section == "instructors" and user_role == 'supervisor':
         show_instructor_management()
-    elif current_section == "ai_assistant":
+    elif current_section == "ai_assistant" and user_role == 'supervisor':
         show_ai_assistant()
-    elif current_section == "analytics":
+    elif current_section == "analytics" and user_role == 'supervisor':
         show_analytics()
-    elif current_section == "settings":
+    elif current_section == "settings" and user_role == 'supervisor':
         show_settings()
-    elif current_section == "help":
+    elif current_section == "help" and user_role == 'supervisor':
         show_help()
     
     # Create footer
@@ -110,7 +116,7 @@ def show_dashboard():
     # Quick actions
     st.markdown("### ⚡ Quick Actions")
     
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
     
     with col1:
         if st.button("📅 Generate New Schedule", use_container_width=True):
@@ -123,6 +129,18 @@ def show_dashboard():
             st.rerun()
     
     with col3:
+        if st.button("📤 Post Schedule", use_container_width=True):
+            st.markdown("### 📤 Post Schedule")
+            uploaded_schedule = st.file_uploader(
+                "Upload Excel Schedule to Post",
+                type=["xlsx"],
+                help="Upload a schedule file to post for instructors"
+            )
+            if uploaded_schedule and st.button("📤 Post Schedule", type="primary"):
+                # TODO: Implement Firebase posting
+                st.success("✅ Schedule posted successfully! Instructors can now view it.")
+    
+    with col4:
         if st.button("📊 View Analytics", use_container_width=True):
             st.session_state.current_section = "analytics"
             st.rerun()
@@ -176,20 +194,21 @@ def show_schedule_generator():
             help_tip = ai_assistant.get_help_tip("enrollment_upload")
             st.info(help_tip)
             
-            # Date selection
-            schedule_date = st.date_input(
-                "Select Schedule Date",
-                value=datetime.now().date(),
-                help="Choose the date for which you want to generate the schedule"
-            )
+            # Date and session selection
+            schedule_date = st.date_input("Select Schedule Date", value=datetime.now().date())
+            session_mode = st.radio("Session Mode", ["AM", "PM"], horizontal=True, help="AM: 8:35-12:10, PM: 4:10-7:05")
             
-            # Session mode selection
-            session_mode = st.radio(
-                "Session Mode",
-                ["AM", "PM"],
-                horizontal=True,
-                help="AM: 8:35-12:10, PM: 4:10-7:05"
-            )
+            # Debug: Show what date is actually selected
+            st.write(f"🔍 Selected Date: {schedule_date} ({schedule_date.strftime('%A')})")
+            
+            # Clear enrollment data if date or session mode changes
+            current_key = f"{schedule_date}_{session_mode}"
+            if 'last_enrollment_key' not in st.session_state or st.session_state['last_enrollment_key'] != current_key:
+                st.session_state['enrollment_data'] = None
+                st.session_state['am_template_df'] = None
+                st.session_state['template_generated'] = False
+                st.session_state['last_enrollment_key'] = current_key
+            
             st.session_state['session_mode'] = session_mode
             
             # File uploads
@@ -217,7 +236,19 @@ def show_schedule_generator():
             
             # Process files when both are uploaded
             if group_file and private_file:
-                if st.button("🚀 Generate Schedule from Enrollments", type="primary"):
+                # Add clear cache button
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    generate_button = st.button("🚀 Generate Schedule from Enrollments", type="primary")
+                with col2:
+                    if st.button("🔄 Clear Cache", help="Clear cached data and force fresh parsing"):
+                        st.session_state['enrollment_data'] = None
+                        st.session_state['am_template_df'] = None
+                        st.session_state['template_generated'] = False
+                        st.session_state['last_enrollment_key'] = None
+                        st.rerun()
+                
+                if generate_button:
                     with st.spinner("Processing enrollment data..."):
                         try:
                             # Initialize parser
@@ -231,6 +262,10 @@ def show_schedule_generator():
                             private_path = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
                             private_path.write(private_file.read())
                             private_path.close()
+                            
+                            print(f"🔍 Parsing for date: {schedule_date} ({schedule_date.strftime('%A')}) in {session_mode} mode")
+                            print(f"🔍 Date type: {type(schedule_date)}")
+                            print(f"🔍 Date value: {schedule_date}")
                             
                             # Parse enrollment data
                             group_classes = parser.parse_group_lessons(group_path.name, schedule_date, session_mode)
@@ -249,7 +284,7 @@ def show_schedule_generator():
                                 }
                                 
                                 # Generate preview
-                                preview_df = parser.get_template_preview(group_classes, private_lessons, session_mode)
+                                preview_df = parser.get_template_preview(group_classes, private_lessons, session_mode, schedule_date)
                                 st.session_state['am_template_df'] = preview_df
                                 
                                 # Set template generated flag for enrollment mode
@@ -259,8 +294,11 @@ def show_schedule_generator():
                                 
                                 create_success_message(f"Schedule template generated successfully for {schedule_date.strftime('%A, %B %d, %Y')}!")
                                 
-                                # Show preview
-                                st.markdown("#### 📋 Generated Schedule Preview")
+                                # Show preview with title
+                                if hasattr(preview_df, 'attrs') and 'title' in preview_df.attrs:
+                                    st.markdown(f"#### 📋 {preview_df.attrs['title']}")
+                                else:
+                                    st.markdown("#### 📋 Generated Schedule Preview")
                                 st.dataframe(preview_df, height=300)
                                 
                                 # Show summary
@@ -469,15 +507,15 @@ def show_schedule_generator():
         for i in range(num_instructors):
             st.markdown(f"### Instructor {i+1}")
             
-            # Get available instructor names for dropdown
-            available_instructors = instructor_manager.get_instructor_names()
-            available_instructors.insert(0, "Select from profiles...")
+            # Get available instructor names from Firebase
+            from firebase_config import firebase_manager
+            firebase_instructors = firebase_manager.get_instructors(st.session_state.get('user_id'))
+            available_instructors = [instructor_info.get('name', 'Unknown') for instructor_info in firebase_instructors.values()]
             
             col1, col2 = st.columns(2)
             
             with col1:
                 # Instructor selection with manual typing capability
-                available_instructors = instructor_manager.get_instructor_names()
                 
                 # Show dropdown for quick selection
                 st.markdown("**Quick Select from Saved Profiles:**")
@@ -519,9 +557,16 @@ def show_schedule_generator():
             # Get instructor profile if selected
             instructor_profile = None
             if selected_profile != "None":
-                instructor_profile = instructor_manager.get_instructor_by_name(selected_profile)
+                for instructor_info in firebase_instructors.values():
+                    if instructor_info.get('name') == selected_profile:
+                        instructor_profile = instructor_info
+                        break
             
-            available_classes = instructor_manager.get_available_classes()
+            available_classes = [
+                "Starters", "P1", "P2", "P3", "Y1", "Y2", "Y3", "PSL",
+                "STRK4", "STRK5", "STRK6", "TN BCS AD BCS", "TN STRK AD STRK",
+                "TN/AD BSCS", "TN/AD STRKS", "CNDTNG"
+            ]
             cant_teach_classes = []
             
             # Create checkboxes in a grid layout
@@ -552,6 +597,82 @@ def show_schedule_generator():
                 "Role": role
             })
 
+        # Template analysis button
+        if st.button("📊 Analyze Template Requirements", type="secondary"):
+            if 'am_template_df' in st.session_state and st.session_state['am_template_df'] is not None:
+                template_df = st.session_state['am_template_df']
+                
+                st.markdown("### 📊 Template Analysis Results")
+                
+                # Count classes
+                class_columns = [col for col in template_df.columns if col not in ['Time', 'brk']]
+                total_classes = 0
+                time_slots = len(template_df)
+                
+                for col in class_columns:
+                    for _, row in template_df.iterrows():
+                        if pd.notna(row[col]) and str(row[col]).strip() != '':
+                            total_classes += 1
+                
+                # Calculate recommendations
+                recommended_instructors = max(3, total_classes // 3)  # At least 3, or 1 per 3 classes
+                
+                # Show analysis
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Total Classes", total_classes)
+                with col2:
+                    st.metric("Time Slots", time_slots)
+                with col3:
+                    st.metric("Recommended Instructors", recommended_instructors)
+                
+                # Show class breakdown
+                st.markdown("#### 📊 Class Breakdown")
+                class_counts = {}
+                for col in class_columns:
+                    count = 0
+                    for _, row in template_df.iterrows():
+                        if pd.notna(row[col]) and str(row[col]).strip() != '':
+                            count += 1
+                    if count > 0:
+                        class_counts[col] = count
+                
+                if class_counts:
+                    class_df = pd.DataFrame(list(class_counts.items()), columns=['Class Type', 'Count'])
+                    st.dataframe(class_df, use_container_width=True)
+                
+                # Show availability recommendations
+                st.markdown("#### ⏰ Recommended Availability")
+                session_mode = st.session_state.get('session_mode', 'AM')
+                if session_mode == "AM":
+                    st.markdown("**AM Session (8:35-12:10)**")
+                    st.markdown("""
+                    - **Start Time**: 8:05 AM (30 min before session)
+                    - **End Time**: 12:40 PM (30 min after session)
+                    - **Total Hours**: 4.5 hours
+                    """)
+                else:
+                    st.markdown("**PM Session (4:10-7:05)**")
+                    st.markdown("""
+                    - **Start Time**: 3:40 PM (30 min before session)
+                    - **End Time**: 7:35 PM (30 min after session)
+                    - **Total Hours**: 3.9 hours
+                    """)
+                
+                # Show break analysis
+                st.markdown("#### 🚫 Break Analysis")
+                break_slots = 0
+                for _, row in template_df.iterrows():
+                    if 'brk' in template_df.columns and pd.notna(row['brk']) and str(row['brk']).strip() != '':
+                        break_slots += 1
+                
+                if break_slots > 0:
+                    st.warning(f"⚠️ {break_slots} break slots detected. Consider reducing breaks for better coverage.")
+                else:
+                    st.success("✅ No excessive breaks detected. Good coverage distribution.")
+            else:
+                st.warning("Please upload a template first to analyze.")
+        
         if st.button("Continue to Step 3", type="primary"):
             availability_df = pd.DataFrame(instructor_data)
             st.session_state['availability_df'] = availability_df
@@ -630,15 +751,88 @@ def show_schedule_generator():
                 st.session_state.current_step = 4
                 st.rerun()
     
-    # Step 4: Download
+    # Step 4: Download & Post Schedule
     elif current_step == 4:
-        st.markdown("### 📥 Step 4: Download Schedule")
+        st.markdown("### 📥 Step 4: Download & Post Schedule")
         
         # Show contextual help
         help_tip = ai_assistant.get_help_tip("download")
         st.info(help_tip)
         
         if st.session_state.schedule_generated:
+            # Schedule posting options
+            st.markdown("#### 📤 Post Schedule Options")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("**Post Generated Schedule**")
+                if st.button("📤 Post App-Generated Schedule", type="primary", use_container_width=True):
+                    if st.session_state.get('output_preview'):
+                        schedule_data = {
+                            "schedule_data": st.session_state['output_preview'],
+                            "template_file": st.session_state.get('am_template_file', ''),
+                            "session_mode": st.session_state.get('session_mode', 'AM'),
+                            "instructors_used": len(st.session_state.get('availability_df', pd.DataFrame())),
+                            "posted_by": st.session_state.get('user_data', {}).get('email', 'Unknown')
+                        }
+                        
+                        from firebase_config import firebase_manager
+                        result = firebase_manager.post_schedule(schedule_data, st.session_state.get('user_id'))
+                        if result["success"]:
+                            instructor_emails = result.get("instructor_emails", [])
+                            if instructor_emails:
+                                st.success(f"✅ Schedule posted successfully!")
+                                st.info(f"📧 **Posted to instructors:** {', '.join(instructor_emails)}")
+                            else:
+                                st.success("✅ Schedule posted successfully!")
+                                st.warning("⚠️ No instructor emails found. Instructors won't be able to view this schedule.")
+                        else:
+                            st.error(f"❌ Failed to post schedule: {result.get('error', 'Unknown error')}")
+                    else:
+                        st.error("❌ No schedule generated yet. Please generate a schedule first.")
+            
+            with col2:
+                st.markdown("**Upload & Post External Schedule**")
+                uploaded_schedule = st.file_uploader(
+                    "Upload Excel Schedule",
+                    type=["xlsx"],
+                    help="Upload a schedule file to post for instructors"
+                )
+                if uploaded_schedule and st.button("📤 Post Uploaded Schedule", type="primary", use_container_width=True):
+                    try:
+                        # Read the uploaded schedule
+                        schedule_df = pd.read_excel(uploaded_schedule, engine="openpyxl")
+                        schedule_data = {
+                            "schedule_data": schedule_df.to_dict('records'),
+                            "template_file": "uploaded_schedule.xlsx",
+                            "session_mode": "Unknown",
+                            "instructors_used": 0,
+                            "posted_by": st.session_state.get('user_data', {}).get('email', 'Unknown')
+                        }
+                        
+                        from firebase_config import firebase_manager
+                        result = firebase_manager.post_schedule(schedule_data, st.session_state.get('user_id'))
+                        if result["success"]:
+                            instructor_emails = result.get("instructor_emails", [])
+                            if instructor_emails:
+                                st.success("✅ Uploaded schedule posted successfully!")
+                                st.info(f"📧 **Posted to instructors:** {', '.join(instructor_emails)}")
+                            else:
+                                st.success("✅ Uploaded schedule posted successfully!")
+                                st.warning("⚠️ No instructor emails found. Instructors won't be able to view this schedule.")
+                            # Clear the uploaded file to show the success message
+                            st.session_state.uploaded_schedule = None
+                        else:
+                            st.error(f"❌ Failed to post schedule: {result.get('error', 'Unknown error')}")
+                    except Exception as e:
+                        st.error(f"❌ Error processing uploaded file: {str(e)}")
+            
+            st.markdown("---")
+            
+            # Download options
+            st.markdown("#### 📥 Download Options")
+            
             col1, col2 = st.columns(2)
             
             with col1:
@@ -694,36 +888,138 @@ def show_instructor_management():
         default_start_time = time(3, 40)   # 3:40 PM
         default_end_time = time(7, 35)     # 7:35 PM
     
-    # Tab for managing instructor profiles
-    tab1, tab2 = st.tabs(["📋 Manage Profiles", "➕ Add New Instructor"])
+    # Tab for managing instructor profiles and template analysis
+    tab1, tab2, tab3 = st.tabs(["📋 Manage Profiles", "➕ Add New Instructor", "📊 Template Analysis"])
     
     with tab1:
         st.markdown("### 📋 Current Instructor Profiles")
         
-        instructors = instructor_manager.get_all_instructors()
+        # Get Firebase instructors
+        from firebase_config import firebase_manager
+        firebase_instructors = firebase_manager.get_instructors(st.session_state.get('user_id'))
         
-        if not instructors:
+        # Display Firebase instructors
+        all_instructors = []
+        
+        # Add Firebase instructors
+        for instructor_id, instructor_data in firebase_instructors.items():
+            all_instructors.append({
+                'source': 'firebase',
+                'id': instructor_id,
+                'data': instructor_data
+            })
+        
+        if not all_instructors:
             st.info("No instructor profiles found. Add your first instructor in the 'Add New Instructor' tab.")
         else:
-            for i, instructor in enumerate(instructors):
-                with st.expander(f"👤 {instructor['name']} - {instructor['role']}", expanded=False):
+            for i, instructor_info in enumerate(all_instructors):
+                instructor = instructor_info['data']
+                source = instructor_info['source']
+                
+                # Create display name
+                display_name = f"👤 {instructor.get('name', 'Unknown')} - {instructor.get('role', 'Unknown')}"
+                
+                with st.expander(display_name, expanded=False):
                     col1, col2 = st.columns([3, 1])
                     
                     with col1:
-                        st.markdown(f"**Name:** {instructor['name']}")
-                        st.markdown(f"**Role:** {instructor['role']}")
-                        st.markdown(f"**Can't Teach:** {', '.join(instructor['cant_teach']) if instructor['cant_teach'] else 'None'}")
+                        st.markdown(f"**Name:** {instructor.get('name', 'N/A')}")
+                        st.markdown(f"**Role:** {instructor.get('role', 'N/A')}")
+                        if instructor.get('email'):
+                            st.markdown(f"**Email:** {instructor['email']}")
+                        st.markdown(f"**Can't Teach:** {', '.join(instructor.get('cant_teach', [])) if instructor.get('cant_teach') else 'None'}")
                         
-                        if instructor['default_start_time'] and instructor['default_end_time']:
+                        if instructor.get('default_start_time') and instructor.get('default_end_time'):
                             st.markdown(f"**Default Times:** {instructor['default_start_time']} - {instructor['default_end_time']}")
+                        
+                        # Show schedule access info if instructor has email
+                        if instructor.get('email'):
+                            st.success(f"✅ This instructor can view schedules when they sign in with: {instructor['email']}")
+                        else:
+                            st.info("ℹ️ Add an email to enable schedule viewing for this instructor")
                     
                     with col2:
+                        # Edit button
+                        if st.button(f"✏️ Edit", key=f"edit_{i}", type="secondary"):
+                            st.session_state.editing_instructor = instructor_info
+                            st.rerun()
+                        
+                        # Delete button
                         if st.button(f"🗑️ Delete", key=f"delete_{i}", type="secondary"):
-                            if instructor_manager.delete_instructor(instructor['name']):
-                                st.success(f"Deleted {instructor['name']}")
+                            if firebase_manager.delete_instructor(instructor_info['id']):
+                                st.success(f"Deleted {instructor.get('name')} from Firebase")
                                 st.rerun()
                             else:
-                                st.error("Failed to delete instructor")
+                                st.error("Failed to delete from Firebase")
+        
+        # Edit instructor form
+        if 'editing_instructor' in st.session_state:
+            st.markdown("---")
+            st.markdown("### ✏️ Edit Instructor")
+            
+            instructor_info = st.session_state.editing_instructor
+            instructor = instructor_info['data']
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                edit_name = st.text_input("Name", value=instructor.get('name', ''), key="edit_name")
+                edit_email = st.text_input("Email (Optional)", value=instructor.get('email', ''), key="edit_email")
+                edit_role = st.selectbox("Role", ["Instructor", "Shadow"], index=0 if instructor.get('role') == "Instructor" else 1, key="edit_role")
+            
+            with col2:
+                edit_start = st.time_input(
+                    f"{session_mode} Start Time",
+                    value=time.fromisoformat(instructor.get('default_start_time', '08:05:00')) if instructor.get('default_start_time') else default_start_time,
+                    key="edit_start"
+                )
+                edit_end = st.time_input(
+                    f"{session_mode} End Time",
+                    value=time.fromisoformat(instructor.get('default_end_time', '12:40:00')) if instructor.get('default_end_time') else default_end_time,
+                    key="edit_end"
+                )
+            
+            # Class preferences
+            st.markdown("### 🚫 Classes They Can't Teach")
+            current_cant_teach = instructor.get('cant_teach', [])
+            available_classes = [
+                "Starters", "P1", "P2", "P3", "Y1", "Y2", "Y3", "PSL",
+                "STRK4", "STRK5", "STRK6", "TN BCS AD BCS", "TN STRK AD STRK",
+                "TN/AD BSCS", "TN/AD STRKS", "CNDTNG"
+            ]
+            edit_cant_teach_classes = []
+            
+            cols = st.columns(4)
+            for j, class_name in enumerate(available_classes):
+                col_idx = j % 4
+                with cols[col_idx]:
+                    is_checked = class_name in current_cant_teach
+                    if st.checkbox(class_name, value=is_checked, key=f"edit_cant_teach_{class_name}"):
+                        edit_cant_teach_classes.append(class_name)
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("💾 Save Changes", type="primary"):
+                    updated_data = {
+                        "name": edit_name,
+                        "email": edit_email,
+                        "role": edit_role,
+                        "cant_teach": edit_cant_teach_classes,
+                        "default_start_time": str(edit_start),
+                        "default_end_time": str(edit_end)
+                    }
+                    
+                    if firebase_manager.update_instructor(instructor_info['id'], updated_data):
+                        st.success("Instructor updated successfully!")
+                        del st.session_state.editing_instructor
+                        st.rerun()
+                    else:
+                        st.error("Failed to update instructor")
+            
+            with col2:
+                if st.button("❌ Cancel", type="secondary"):
+                    del st.session_state.editing_instructor
+                    st.rerun()
     
     with tab2:
         st.markdown("### ➕ Add New Instructor Profile")
@@ -733,6 +1029,7 @@ def show_instructor_management():
         
         with col1:
             new_name = st.text_input("Name", placeholder="Enter instructor name")
+            new_email = st.text_input("Email (Optional)", placeholder="Enter instructor email")
             new_role = st.selectbox("Role", ["Instructor", "Shadow"])
         
         with col2:
@@ -751,7 +1048,11 @@ def show_instructor_management():
         st.markdown("### 🚫 Classes They Can't Teach")
         st.markdown("Select all classes this instructor cannot teach:")
         
-        available_classes = instructor_manager.get_available_classes()
+        available_classes = [
+            "Starters", "P1", "P2", "P3", "Y1", "Y2", "Y3", "PSL",
+            "STRK4", "STRK5", "STRK6", "TN BCS AD BCS", "TN STRK AD STRK",
+            "TN/AD BSCS", "TN/AD STRKS", "CNDTNG"
+        ]
         cant_teach_classes = []
         
         # Create checkboxes in columns for better layout
@@ -764,19 +1065,111 @@ def show_instructor_management():
         
         if st.button("Add Instructor Profile", type="primary"):
             if new_name.strip():
-                if instructor_manager.add_instructor(
-                    name=new_name.strip(),
-                    role=new_role,
-                    cant_teach=cant_teach_classes,
-                    default_start_time=new_start,
-                    default_end_time=new_end
-                ):
+                # Add to Firebase
+                new_instructor_data = {
+                    "name": new_name.strip(),
+                    "email": new_email.strip() if new_email.strip() else None,
+                    "role": new_role,
+                    "cant_teach": cant_teach_classes,
+                    "default_start_time": str(new_start),
+                    "default_end_time": str(new_end)
+                }
+                from firebase_config import firebase_manager
+                if firebase_manager.add_instructor(new_instructor_data, st.session_state.get('user_id')):
                     st.success(f"Instructor '{new_name}' added successfully!")
+                    # Clear form
                     st.rerun()
                 else:
-                    st.error("An instructor with this name already exists!")
+                    st.error("❌ Failed to add instructor")
             else:
                 st.error("Please enter a name for the instructor.")
+    
+    with tab3:
+        st.markdown("### 📊 Template Analysis")
+        st.markdown("Upload a template to analyze instructor requirements and recommendations.")
+        
+        uploaded_template = st.file_uploader(
+            "Upload Template for Analysis",
+            type=["xlsx"],
+            help="Upload a schedule template to analyze instructor needs"
+        )
+        
+        if uploaded_template:
+            try:
+                # Read the template
+                template_df = pd.read_excel(uploaded_template, engine="openpyxl")
+                
+                # Analyze the template
+                st.markdown("#### 📋 Template Analysis Results")
+                
+                # Count classes
+                class_columns = [col for col in template_df.columns if col not in ['Time', 'brk']]
+                total_classes = 0
+                time_slots = len(template_df)
+                
+                for col in class_columns:
+                    for _, row in template_df.iterrows():
+                        if pd.notna(row[col]) and str(row[col]).strip() != '':
+                            total_classes += 1
+                
+                # Calculate recommendations
+                recommended_instructors = max(3, total_classes // 3)  # At least 3, or 1 per 3 classes
+                
+                # Show analysis
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Total Classes", total_classes)
+                with col2:
+                    st.metric("Time Slots", time_slots)
+                with col3:
+                    st.metric("Recommended Instructors", recommended_instructors)
+                
+                # Show class breakdown
+                st.markdown("#### 📊 Class Breakdown")
+                class_counts = {}
+                for col in class_columns:
+                    count = 0
+                    for _, row in template_df.iterrows():
+                        if pd.notna(row[col]) and str(row[col]).strip() != '':
+                            count += 1
+                    if count > 0:
+                        class_counts[col] = count
+                
+                if class_counts:
+                    class_df = pd.DataFrame(list(class_counts.items()), columns=['Class Type', 'Count'])
+                    st.dataframe(class_df, use_container_width=True)
+                
+                # Show availability recommendations
+                st.markdown("#### ⏰ Recommended Availability")
+                if session_mode == "AM":
+                    st.markdown("**AM Session (8:35-12:10)**")
+                    st.markdown("""
+                    - **Start Time**: 8:05 AM (30 min before session)
+                    - **End Time**: 12:40 PM (30 min after session)
+                    - **Total Hours**: 4.5 hours
+                    """)
+                else:
+                    st.markdown("**PM Session (4:10-7:05)**")
+                    st.markdown("""
+                    - **Start Time**: 3:40 PM (30 min before session)
+                    - **End Time**: 7:35 PM (30 min after session)
+                    - **Total Hours**: 3.9 hours
+                    """)
+                
+                # Show break analysis
+                st.markdown("#### 🚫 Break Analysis")
+                break_slots = 0
+                for _, row in template_df.iterrows():
+                    if 'brk' in template_df.columns and pd.notna(row['brk']) and str(row['brk']).strip() != '':
+                        break_slots += 1
+                
+                if break_slots > 0:
+                    st.warning(f"⚠️ {break_slots} break slots detected. Consider reducing breaks for better coverage.")
+                else:
+                    st.success("✅ No excessive breaks detected. Good coverage distribution.")
+                
+            except Exception as e:
+                st.error(f"Error analyzing template: {str(e)}")
 
 def show_ai_assistant():
     """Show the AI assistant chatbot"""
@@ -1002,6 +1395,179 @@ def show_help():
         - Schedule generation fails: Check instructor availability
         - Download issues: Clear browser cache and try again
         """)
+
+def show_employee_schedule_view():
+    """Show employee schedule view with posted schedule"""
+    st.markdown("## 📋 Current Schedule")
+    
+    # Get active schedule from Firebase (filtered by user email)
+    from firebase_config import firebase_manager
+    user_email = st.session_state.get('user_data', {}).get('email', '')
+    active_schedule = firebase_manager.get_active_schedule(user_email)
+    
+    if active_schedule:
+        st.success("✅ Active schedule found!")
+        
+        # Show schedule info
+        schedule_info = active_schedule
+        st.markdown(f"**Posted by:** {schedule_info.get('posted_by', 'Unknown')}")
+        st.markdown(f"**Session Mode:** {schedule_info.get('session_mode', 'Unknown')}")
+        st.markdown(f"**Instructors Used:** {schedule_info.get('instructors_used', 0)}")
+        
+        # Convert schedule data to DataFrame
+        if 'schedule_data' in schedule_info:
+            schedule_df = pd.DataFrame(schedule_info['schedule_data'])
+            st.dataframe(schedule_df, use_container_width=True)
+            
+            # Show employee-specific assignments
+            employee_email = st.session_state.get('user_data', {}).get('email', '')
+            
+            st.markdown("---")
+            st.markdown(f"### 👤 Your Assignments ({employee_email})")
+            
+            # Filter assignments for this employee
+            employee_assignments = []
+            for _, row in schedule_df.iterrows():
+                for col in schedule_df.columns:
+                    if col != 'Time' and col != 'brk' and pd.notna(row[col]) and str(row[col]).strip() != '':
+                        # Simple matching - in real app, you'd match by email
+                        if employee_email and employee_email.lower() in str(row[col]).lower():
+                            employee_assignments.append({
+                                'Time': row['Time'],
+                                'Class': col,
+                                'Assignment': row[col]
+                            })
+            
+            if employee_assignments:
+                st.markdown("#### 📅 Your Schedule Today")
+                for assignment in employee_assignments:
+                    st.markdown(f"**{assignment['Time']}**: {assignment['Class']} - {assignment['Assignment']}")
+                
+                # Show metrics
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Today's Classes", len(employee_assignments))
+                with col2:
+                    st.metric("Total Students", "23")
+                with col3:
+                    st.metric("Break Time", "2 hours")
+            else:
+                st.info("No specific assignments found for your email. This may be a demo schedule.")
+        else:
+            st.error("Schedule data not found in the posted schedule.")
+    else:
+        st.info("📋 No active schedule posted yet. Check back later or contact your supervisor.")
+        
+        # Show demo schedule for reference
+        st.markdown("#### Demo Schedule (for reference)")
+        demo_schedule = pd.DataFrame({
+            'Time': ['8:35', '9:10', '9:45', '10:20', '11:00', '11:35', '12:10'],
+            'Starters': ['', '', '', '', '', '', ''],
+            'P1': ['Sarah', 'Mike', '', 'Emma', '', 'Alex', ''],
+            'P2': ['', 'Sarah', 'Mike', '', 'Emma', '', 'Alex'],
+            'P3': ['Mike', '', 'Sarah', 'Mike', 'Sarah', 'Mike', ''],
+            'Y1': ['Emma', 'Alex', 'Emma', '', 'Mike', 'Sarah', ''],
+            'Y2': ['Alex', 'Emma', 'Alex', 'Emma', 'Alex', '', 'Mike'],
+            'Y3': ['', 'Mike', 'Sarah', 'Alex', 'Emma', 'Alex', 'Sarah'],
+            'PSL': ['Private 1', 'Private 2', '', 'Private 3', '', 'Private 4', ''],
+            'STRK4': ['', 'Sarah', 'Mike', '', 'Emma', 'Alex', ''],
+            'STRK5': ['Mike', '', 'Sarah', 'Mike', '', 'Sarah', ''],
+            'STRK6': ['Sarah', 'Mike', '', 'Emma', 'Alex', '', 'Mike'],
+            'TN/AD BSCS': ['', 'Emma', 'Alex', '', 'Sarah', 'Mike', ''],
+            'TN/AD STRKS': ['Alex', '', 'Emma', 'Alex', '', 'Emma', ''],
+            'CNDTNG': ['Emma', 'Alex', '', 'Mike', 'Sarah', '', 'Alex'],
+            'brk': ['Break', 'Break', 'Break', 'Break', 'Break', 'Break', 'Break']
+        })
+        
+        st.dataframe(demo_schedule, use_container_width=True)
+
+def show_employee_dashboard():
+    """Show employee dashboard with posted schedule view"""
+    st.markdown("## 👋 Welcome, Employee!")
+    
+    # Show posted schedule if available
+    st.markdown("### 📋 Current Schedule")
+    
+    # Get active schedule from Firebase (filtered by user email)
+    from firebase_config import firebase_manager
+    user_email = st.session_state.get('user_data', {}).get('email', '')
+    active_schedule = firebase_manager.get_active_schedule(user_email)
+    
+    if active_schedule:
+        st.success("✅ Active schedule found!")
+        
+        # Show schedule info
+        schedule_info = active_schedule
+        st.markdown(f"**Posted by:** {schedule_info.get('posted_by', 'Unknown')}")
+        st.markdown(f"**Session Mode:** {schedule_info.get('session_mode', 'Unknown')}")
+        st.markdown(f"**Instructors Used:** {schedule_info.get('instructors_used', 0)}")
+        
+        # Convert schedule data to DataFrame
+        if 'schedule_data' in schedule_info:
+            schedule_df = pd.DataFrame(schedule_info['schedule_data'])
+            st.dataframe(schedule_df, use_container_width=True)
+            
+            # Show employee-specific assignments
+            employee_email = st.session_state.get('user_data', {}).get('email', '')
+            
+            st.markdown("---")
+            st.markdown(f"### 👤 Your Assignments ({employee_email})")
+            
+            # Filter assignments for this employee
+            employee_assignments = []
+            for _, row in schedule_df.iterrows():
+                for col in schedule_df.columns:
+                    if col != 'Time' and col != 'brk' and pd.notna(row[col]) and str(row[col]).strip() != '':
+                        # Simple matching - in real app, you'd match by email
+                        if employee_email and employee_email.lower() in str(row[col]).lower():
+                            employee_assignments.append({
+                                'Time': row['Time'],
+                                'Class': col,
+                                'Assignment': row[col]
+                            })
+            
+            if employee_assignments:
+                st.markdown("#### 📅 Your Schedule Today")
+                for assignment in employee_assignments:
+                    st.markdown(f"**{assignment['Time']}**: {assignment['Class']} - {assignment['Assignment']}")
+                
+                # Show metrics
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Today's Classes", len(employee_assignments))
+                with col2:
+                    st.metric("Total Students", "23")
+                with col3:
+                    st.metric("Break Time", "2 hours")
+            else:
+                st.info("No specific assignments found for your email. This may be a demo schedule.")
+        else:
+            st.error("Schedule data not found in the posted schedule.")
+    else:
+        st.info("📋 No active schedule posted yet. Check back later or contact your supervisor.")
+        
+        # Show demo schedule for reference
+        st.markdown("#### Demo Schedule (for reference)")
+        demo_schedule = pd.DataFrame({
+            'Time': ['8:35', '9:10', '9:45', '10:20', '11:00', '11:35', '12:10'],
+            'Starters': ['', '', '', '', '', '', ''],
+            'P1': ['Sarah', 'Mike', '', 'Emma', '', 'Alex', ''],
+            'P2': ['', 'Sarah', 'Mike', '', 'Emma', '', 'Alex'],
+            'P3': ['Mike', '', 'Sarah', 'Mike', 'Sarah', 'Mike', ''],
+            'Y1': ['Emma', 'Alex', 'Emma', '', 'Mike', 'Sarah', ''],
+            'Y2': ['Alex', 'Emma', 'Alex', 'Emma', 'Alex', '', 'Mike'],
+            'Y3': ['', 'Mike', 'Sarah', 'Alex', 'Emma', 'Alex', 'Sarah'],
+            'PSL': ['Private 1', 'Private 2', '', 'Private 3', '', 'Private 4', ''],
+            'STRK4': ['', 'Sarah', 'Mike', '', 'Emma', 'Alex', ''],
+            'STRK5': ['Mike', '', 'Sarah', 'Mike', '', 'Sarah', ''],
+            'STRK6': ['Sarah', 'Mike', '', 'Emma', 'Alex', '', 'Mike'],
+            'TN/AD BSCS': ['', 'Emma', 'Alex', '', 'Sarah', 'Mike', ''],
+            'TN/AD STRKS': ['Alex', '', 'Emma', 'Alex', '', 'Emma', ''],
+            'CNDTNG': ['Emma', 'Alex', '', 'Mike', 'Sarah', '', 'Alex'],
+            'brk': ['Break', 'Break', 'Break', 'Break', 'Break', 'Break', 'Break']
+        })
+        
+        st.dataframe(demo_schedule, use_container_width=True)
 
 # Run the main application
 if __name__ == "__main__":

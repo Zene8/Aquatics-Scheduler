@@ -45,7 +45,8 @@ class InstructorManager:
         return None
     
     def add_instructor(self, name: str, role: str, cant_teach: List[str], 
-                      default_start_time: time = None, default_end_time: time = None) -> bool:
+                      default_start_time: time = None, default_end_time: time = None, 
+                      email: str = None) -> bool:
         """Add a new instructor profile"""
         # Check if instructor already exists
         if self.get_instructor_by_name(name):
@@ -56,7 +57,8 @@ class InstructorManager:
             'role': role,
             'cant_teach': cant_teach,
             'default_start_time': default_start_time.isoformat() if default_start_time else None,
-            'default_end_time': default_end_time.isoformat() if default_end_time else None
+            'default_end_time': default_end_time.isoformat() if default_end_time else None,
+            'email': email
         }
         
         self.instructors.append(instructor)
@@ -64,7 +66,8 @@ class InstructorManager:
         return True
     
     def update_instructor(self, name: str, role: str, cant_teach: List[str],
-                        default_start_time: time = None, default_end_time: time = None) -> bool:
+                        default_start_time: time = None, default_end_time: time = None, 
+                        email: str = None) -> bool:
         """Update an existing instructor profile"""
         instructor = self.get_instructor_by_name(name)
         if not instructor:
@@ -74,6 +77,7 @@ class InstructorManager:
         instructor['cant_teach'] = cant_teach
         instructor['default_start_time'] = default_start_time.isoformat() if default_start_time else None
         instructor['default_end_time'] = default_end_time.isoformat() if default_end_time else None
+        instructor['email'] = email
         
         self._save_instructors()
         return True

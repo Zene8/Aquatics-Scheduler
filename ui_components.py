@@ -231,41 +231,45 @@ def create_navigation_tabs():
     return tab1, tab2, tab3, tab4
 
 def create_sidebar_menu():
-    """Create sidebar menu with futuristic styling using radio buttons"""
-    st.sidebar.markdown("""
-        <div style="text-align: center; padding: 1rem;">
-            <h3 style="color: #00d4ff; font-family: 'Orbitron', monospace;">NAVIGATION</h3>
-        </div>
-    """, unsafe_allow_html=True)
+    """Create sidebar navigation menu with role-based options"""
+    st.sidebar.markdown("## 🧭 Navigation")
     
-    # Use radio buttons for navigation to prevent rerun issues
-    menu_options = {
-        "🏠 Dashboard": "dashboard",
-        "📅 Schedule Generator": "schedule",
-        "👥 Instructor Management": "instructors",
-        "🤖 AI Assistant": "ai_assistant",
-        "📊 Analytics": "analytics",
-        "⚙️ Settings": "settings",
-        "❓ Help": "help"
-    }
+    # Get user role
+    user_role = st.session_state.get('user_role', 'employee')
     
-    # Initialize session state for navigation if not exists
-    if 'current_nav' not in st.session_state:
-        st.session_state.current_nav = "dashboard"
+    if user_role == 'supervisor':
+        # Supervisor menu options
+        current_section = st.sidebar.radio(
+            "Select Section",
+            ["dashboard", "schedule", "instructors", "ai_assistant", "analytics", "settings", "help"],
+            format_func=lambda x: {
+                "dashboard": "🏠 Dashboard",
+                "schedule": "📅 Schedule Generator", 
+                "instructors": "👥 Instructor Management",
+                "ai_assistant": "🤖 AI Assistant",
+                "analytics": "📊 Analytics",
+                "settings": "⚙️ Settings",
+                "help": "❓ Help"
+            }[x]
+        )
+    else:
+        # Employee menu options (limited)
+        current_section = st.sidebar.radio(
+            "Select Section",
+            ["dashboard", "schedule"],
+            format_func=lambda x: {
+                "dashboard": "🏠 Dashboard",
+                "schedule": "📋 View Schedule"
+            }[x]
+        )
     
-    # Create radio buttons for navigation
-    selected = st.sidebar.radio(
-        "Navigation",
-        options=list(menu_options.keys()),
-        index=list(menu_options.keys()).index([k for k, v in menu_options.items() if v == st.session_state.current_nav][0]),
-        label_visibility="collapsed",
-        key="nav_radio"
-    )
+    # Add logout button
+    st.sidebar.markdown("---")
+    if st.sidebar.button("🚪 Logout", use_container_width=True):
+        from auth import logout
+        logout()
     
-    # Update session state
-    st.session_state.current_nav = menu_options[selected]
-    
-    return st.session_state.current_nav
+    return current_section
 
 def create_footer():
     """Create a futuristic footer"""
