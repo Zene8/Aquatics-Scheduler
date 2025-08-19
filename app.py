@@ -14,6 +14,8 @@ from openpyxl import load_workbook, Workbook, styles
 from shutil import copyfile
 from ai_assistant import ai_assistant
 from enrollment_parser import EnrollmentParser
+import firebase_admin
+from firebase_admin import credentials, auth
 # Initialize Firebase Admin exactly once, using the TOML section [firebase]
 if not firebase_admin._apps:
     sa = dict(st.secrets["firebase"])  # section name must match your secrets TOML: [firebase]
