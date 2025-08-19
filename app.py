@@ -14,18 +14,8 @@ from openpyxl import load_workbook, Workbook, styles
 from shutil import copyfile
 from ai_assistant import ai_assistant
 from enrollment_parser import EnrollmentParser
-import firebase_admin
-from firebase_admin import credentials, auth
-# Initialize Firebase Admin exactly once, using the TOML section [firebase]
-if not firebase_admin._apps:
-    sa = dict(st.secrets["firebase"])  # section name must match your secrets TOML: [firebase]
-    # DO NOT replace \\n here because your TOML uses triple quotes with real newlines
-    cred = credentials.Certificate(sa)
-    firebase_admin.initialize_app(cred)
-
-# Optional: sanity logs to confirm the server is using the expected project
-st.write("Admin project_id:", st.secrets["firebase"]["project_id"])
-st.write("Admin client_email:", st.secrets["firebase"]["client_email"])
+# Firebase configuration will be handled by firebase_config.py
+# No need to initialize here as it's done in the FirebaseManager class
 # Page Configuration
 st.set_page_config(
     page_title="Aqua Scheduler Pro",

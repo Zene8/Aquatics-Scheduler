@@ -2,6 +2,24 @@
 
 ## Latest Fixes (Latest Update)
 
+### ✅ Fixed: Firebase Deployment Issues
+**Problem**: "Invalid database URL: None" error in Streamlit deployment and JWT signature errors.
+
+**Root Cause**: 
+- `serviceAccountKey.json` was in `.gitignore` and not deployed to Streamlit
+- Firebase credentials not properly configured for deployment environment
+
+**Solution**:
+- Updated `firebase_config.py` to use Streamlit secrets for deployment
+- Falls back to local file for development
+- Added proper error handling and validation for Firebase configuration
+- Enhanced JWT signature error handling for email verification
+
+**Files Changed**:
+- `firebase_config.py`: Updated initialization logic
+- `app.py`: Removed conflicting Firebase initialization
+- `STREAMLIT_DEPLOYMENT.md`: Added deployment guide
+
 ### ✅ Fixed: AttributeError: 'dict' object has no attribute 'append'
 **Problem**: In the schedule generator, there was a variable name conflict where `instructor_data` was being used as both a list (for schedule generation) and a dictionary (for instructor management).
 

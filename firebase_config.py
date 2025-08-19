@@ -17,6 +17,8 @@ FIREBASE_CONFIG = {
     "measurementId": "G-HZNX6HVBGZ"
 }
 
+# Firebase configuration loaded successfully
+
 class FirebaseManager:
     def __init__(self):
         self.auth = None
@@ -27,6 +29,19 @@ class FirebaseManager:
     
     def initialize_firebase(self):
         try:
+            # Validate Firebase configuration
+            required_keys = ['apiKey', 'authDomain', 'databaseURL', 'projectId']
+            missing_keys = [key for key in required_keys if not FIREBASE_CONFIG.get(key)]
+            
+            if missing_keys:
+                st.error(f"❌ Missing required Firebase configuration keys: {missing_keys}")
+                st.stop()
+            
+            # Validate database URL
+            if not FIREBASE_CONFIG.get('databaseURL'):
+                st.error("❌ Database URL is missing from Firebase configuration")
+                st.stop()
+            
             # Initialize Pyrebase for authentication
             import pyrebase
             self.firebase = pyrebase.initialize_app(FIREBASE_CONFIG)
@@ -38,8 +53,23 @@ class FirebaseManager:
             
             # Check if Firebase Admin is already initialized
             if not firebase_admin._apps:
-                # Use service account credentials
-                cred = credentials.Certificate("serviceAccountKey.json")
+                # Use service account credentials - try Streamlit secrets first, then local file
+                try:
+                    # Try to use Streamlit secrets (for deployment)
+                    if hasattr(st, 'secrets') and 'firebase' in st.secrets:
+                        sa = dict(st.secrets["firebase"])
+                        cred = credentials.Certificate(sa)
+                        st.write("✅ Using Firebase credentials from Streamlit secrets")
+                    else:
+                        # Fall back to local file (for development)
+                        cred = credentials.Certificate("serviceAccountKey.json")
+                        st.write("✅ Using Firebase credentials from local file")
+                except Exception as e:
+                    st.error(f"❌ Failed to load Firebase credentials: {e}")
+                    st.error("For deployment: Add Firebase credentials to Streamlit secrets")
+                    st.error("For development: Ensure serviceAccountKey.json is in the project directory")
+                    st.stop()
+                
                 firebase_admin.initialize_app(cred, {
                     'databaseURL': FIREBASE_CONFIG['databaseURL']
                 })
@@ -93,7 +123,10 @@ class FirebaseManager:
                 admin_user = self.admin_auth.get_user_by_email(email)
                 email_verified = admin_user.email_verified
             except Exception as e:
-                st.warning(f"⚠️ Could not verify email status: {e}")
+                if "Invalid JWT Signature" in str(e) or "invalid_grant" in str(e):
+                    st.warning("⚠️ JWT signature error - this may be due to service account key issues or time synchronization. Proceeding with sign-in...")
+                else:
+                    st.warning(f"⚠️ Could not verify email status: {e}")
                 email_verified = True  # Allow sign-in if we can't verify status
             
             if not email_verified:
