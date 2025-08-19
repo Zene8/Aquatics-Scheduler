@@ -138,8 +138,31 @@ def show_dashboard():
                 help="Upload a schedule file to post for instructors"
             )
             if uploaded_schedule and st.button("📤 Post Schedule", type="primary"):
-                # TODO: Implement Firebase posting
-                st.success("✅ Schedule posted successfully! Instructors can now view it.")
+                try:
+                    # Read the uploaded schedule
+                    schedule_df = pd.read_excel(uploaded_schedule, engine="openpyxl")
+                    schedule_data = {
+                        "schedule_data": schedule_df.to_dict('records'),
+                        "template_file": "uploaded_schedule.xlsx",
+                        "session_mode": "Unknown",
+                        "instructors_used": 0,
+                        "posted_by": st.session_state.get('user_data', {}).get('email', 'Unknown')
+                    }
+                    
+                    from firebase_config import firebase_manager
+                    result = firebase_manager.post_schedule(schedule_data, st.session_state.get('user_id'))
+                    if result["success"]:
+                        instructor_emails = result.get("instructor_emails", [])
+                        if instructor_emails:
+                            st.success("✅ Schedule posted successfully!")
+                            st.info(f"📧 **Posted to instructors:** {', '.join(instructor_emails)}")
+                        else:
+                            st.success("✅ Schedule posted successfully!")
+                            st.warning("⚠️ No instructor emails found. Instructors won't be able to view this schedule.")
+                    else:
+                        st.error(f"❌ Failed to post schedule: {result.get('error', 'Unknown error')}")
+                except Exception as e:
+                    st.error(f"❌ Error processing uploaded file: {str(e)}")
     
     with col4:
         if st.button("📊 View Analytics", use_container_width=True):
@@ -495,198 +518,316 @@ def show_schedule_generator():
             default_start_time = time(3, 40)   # 3:40 PM
             default_end_time = time(7, 35)     # 7:35 PM
         
-        num_instructors = st.number_input(
-            "Number of Instructors",
-            min_value=1,
-            max_value=20,
-            value=3,
-            help="How many instructors do you want to add?"
+        # Check if template analysis suggestions are available
+        use_template_analysis = st.session_state.get('use_template_analysis', False)
+        template_suggestions = st.session_state.get('template_analysis_suggestions', [])
+        
+        # Instructor input method selection
+        input_method = st.radio(
+            "Choose Instructor Input Method",
+            ["Use Default Session Times", "Use Template Analysis Results"],
+            help="Default: Manual entry with session times. Template Analysis: Auto-populate from template analysis."
         )
-
-        instructor_data = []
         
-        for i in range(num_instructors):
-            st.markdown(f"### Instructor {i+1}")
-            
-            # Get available instructor names from Firebase
-            from firebase_config import firebase_manager
-            firebase_instructors = firebase_manager.get_instructors(st.session_state.get('user_id'))
-            available_instructors = [instructor_info.get('name', 'Unknown') for instructor_info in firebase_instructors.values()]
-            
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                # Instructor selection with manual typing capability
+        if input_method == "Use Template Analysis Results":
+            if use_template_analysis and template_suggestions:
+                st.success("✅ Using template analysis suggestions!")
                 
-                # Show dropdown for quick selection
-                st.markdown("**Quick Select from Saved Profiles:**")
-                selected_profile = st.selectbox(
-                    f"Select from profiles (optional)", 
-                    ["None"] + available_instructors,
-                    key=f"profile_{i}",
-                    help="Choose from saved profiles or type manually below"
-                )
+                # Display the suggestions that will be used
+                st.markdown("#### 📋 Template Analysis Suggestions")
+                for i, suggestion in enumerate(template_suggestions):
+                    st.markdown(f"**{suggestion['name']}** ({suggestion['role']}): {suggestion['suggested_start']} - {suggestion['suggested_end']}")
                 
-                # Manual name input (always available)
-                st.markdown("**Enter Instructor Name:**")
-                if selected_profile == "None":
-                    name = st.text_input(f"Name", key=f"name_{i}", placeholder="Enter instructor name")
-                else:
-                    # Pre-fill with selected profile but allow editing
-                    name = st.text_input(f"Name", value=selected_profile, key=f"name_{i}", 
-                                       placeholder="Enter instructor name or edit selected name")
+                # Auto-populate instructor data from template analysis
+                instructor_data = []
+                for suggestion in template_suggestions:
+                    # Get instructor profile from Firebase to get cant_teach preferences
+                    from firebase_config import firebase_manager
+                    firebase_instructors = firebase_manager.get_instructors(st.session_state.get('user_id'))
+                    
+                    cant_teach_classes = []
+                    for instructor_id, instructor_data_fb in firebase_instructors.items():
+                        if instructor_data_fb.get('name') == suggestion['name']:
+                            cant_teach_classes = instructor_data_fb.get('cant_teach', [])
+                            break
+                    
+                    # Parse times and convert to 24-hour format strings (HH:MM format)
+                    start_hour, start_minute = parse_time_string(suggestion['suggested_start'])
+                    end_hour, end_minute = parse_time_string(suggestion['suggested_end'])
+                     
+                    # Create time objects for internal processing
+                    start_time_obj = time(start_hour, start_minute)
+                    end_time_obj = time(end_hour, end_minute)
+                    
+                    # Format as 24-hour strings (HH:MM format) for schedule generation compatibility
+                    start_display = start_time_obj.strftime("%H:%M")
+                    end_display = end_time_obj.strftime("%H:%M")
+                    
+                    instructor_data.append({
+                        "Name": suggestion['name'],
+                        "AM Start": start_display,  # Store as 24-hour format string (HH:MM)
+                        "AM End": end_display,      # Store as 24-hour format string (HH:MM)
+                        "Can't Teach": ", ".join(cant_teach_classes) if cant_teach_classes else "",
+                        "Role": suggestion['role']
+                    })
                 
-                start_time = st.time_input(
-                    f"{session_mode} Start Time", 
-                    key=f"start_{i}",
-                    value=default_start_time,
-                    help=f"Default: 30 minutes before {session_mode} session starts"
-                )
-            
-            with col2:
-                end_time = st.time_input(
-                    f"{session_mode} End Time", 
-                    key=f"end_{i}",
-                    value=default_end_time,
-                    help=f"Default: 30 minutes after {session_mode} session ends"
-                )
-                role = st.selectbox(f"Role", ["Instructor", "Shadow"], key=f"role_{i}")
-            
-            # Class preferences with checkboxes
-            st.markdown("#### 🚫 Classes They Can't Teach")
-            
-            # Get instructor profile if selected
-            instructor_profile = None
-            if selected_profile != "None":
-                for instructor_info in firebase_instructors.values():
-                    if instructor_info.get('name') == selected_profile:
-                        instructor_profile = instructor_info
-                        break
-            
-            available_classes = [
-                "Starters", "P1", "P2", "P3", "Y1", "Y2", "Y3", "PSL",
-                "STRK4", "STRK5", "STRK6", "TN BCS AD BCS", "TN STRK AD STRK",
-                "TN/AD BSCS", "TN/AD STRKS", "CNDTNG"
-            ]
-            cant_teach_classes = []
-            
-            # Create checkboxes in a grid layout
-            st.markdown("Select all classes this instructor cannot teach:")
-            
-            # Use columns for layout instead of container parameter
-            cols = st.columns(4)
-            for j, class_name in enumerate(available_classes):
-                col_idx = j % 4
+                # Show preview
+                st.markdown("#### 📊 Auto-Populated Instructor Data")
                 
-                # Pre-check if this class is in instructor's profile
-                is_checked = False
-                if instructor_profile and class_name in instructor_profile.get('cant_teach', []):
-                    is_checked = True
+                # Create a display-friendly version for the preview
+                display_data = []
+                for instructor in instructor_data:
+                    # Convert 24-hour format strings to 12-hour format for display
+                    start_str = instructor["AM Start"]
+                    end_str = instructor["AM End"]
+                    
+                    # Parse and format for display
+                    try:
+                        if ':' in start_str:
+                            hour, minute = map(int, start_str.split(':'))
+                            start_dt = datetime.combine(datetime.today(), time(hour, minute))
+                            start_display = start_dt.strftime("%I:%M %p").lstrip("0")
+                        else:
+                            start_display = start_str
+                    except:
+                        start_display = start_str
+                    
+                    try:
+                        if ':' in end_str:
+                            hour, minute = map(int, end_str.split(':'))
+                            end_dt = datetime.combine(datetime.today(), time(hour, minute))
+                            end_display = end_dt.strftime("%I:%M %p").lstrip("0")
+                        else:
+                            end_display = end_str
+                    except:
+                        end_display = end_str
+                    
+                    display_data.append({
+                        "Name": instructor["Name"],
+                        "AM Start": start_display,
+                        "AM End": end_display,
+                        "Can't Teach": instructor["Can't Teach"],
+                        "Role": instructor["Role"]
+                    })
                 
-                with cols[col_idx]:
-                    if st.checkbox(class_name, value=is_checked, key=f"cant_teach_{i}_{class_name}"):
-                        cant_teach_classes.append(class_name)
-            
-            # Convert list to string for compatibility with existing code
-            cant_teach_str = ", ".join(cant_teach_classes) if cant_teach_classes else ""
-
-            instructor_data.append({
-                "Name": name,
-                "AM Start": start_time,
-                "AM End": end_time,
-                "Can't Teach": cant_teach_str,
-                "Role": role
-            })
-
-        # Template analysis button
-        if st.button("📊 Analyze Template Requirements", type="secondary"):
-            if 'am_template_df' in st.session_state and st.session_state['am_template_df'] is not None:
-                template_df = st.session_state['am_template_df']
+                preview_df = pd.DataFrame(display_data)
+                st.dataframe(preview_df, use_container_width=True)
                 
-                st.markdown("### 📊 Template Analysis Results")
+                # Continue button
+                if st.button("Continue to Step 3", type="primary"):
+                    # instructor_data contains 24-hour format strings, which is what schedule generation expects
+                    availability_df = pd.DataFrame(instructor_data)
+                    st.session_state['availability_df'] = availability_df
+                    st.session_state.current_step = 3
+                    st.rerun()
                 
-                # Count classes
-                class_columns = [col for col in template_df.columns if col not in ['Time', 'brk']]
-                total_classes = 0
-                time_slots = len(template_df)
-                
-                for col in class_columns:
-                    for _, row in template_df.iterrows():
-                        if pd.notna(row[col]) and str(row[col]).strip() != '':
-                            total_classes += 1
-                
-                # Calculate recommendations
-                recommended_instructors = max(3, total_classes // 3)  # At least 3, or 1 per 3 classes
-                
-                # Show analysis
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("Total Classes", total_classes)
-                with col2:
-                    st.metric("Time Slots", time_slots)
-                with col3:
-                    st.metric("Recommended Instructors", recommended_instructors)
-                
-                # Show class breakdown
-                st.markdown("#### 📊 Class Breakdown")
-                class_counts = {}
-                for col in class_columns:
-                    count = 0
-                    for _, row in template_df.iterrows():
-                        if pd.notna(row[col]) and str(row[col]).strip() != '':
-                            count += 1
-                    if count > 0:
-                        class_counts[col] = count
-                
-                if class_counts:
-                    class_df = pd.DataFrame(list(class_counts.items()), columns=['Class Type', 'Count'])
-                    st.dataframe(class_df, use_container_width=True)
-                
-                # Show availability recommendations
-                st.markdown("#### ⏰ Recommended Availability")
-                session_mode = st.session_state.get('session_mode', 'AM')
-                if session_mode == "AM":
-                    st.markdown("**AM Session (8:35-12:10)**")
-                    st.markdown("""
-                    - **Start Time**: 8:05 AM (30 min before session)
-                    - **End Time**: 12:40 PM (30 min after session)
-                    - **Total Hours**: 4.5 hours
-                    """)
-                else:
-                    st.markdown("**PM Session (4:10-7:05)**")
-                    st.markdown("""
-                    - **Start Time**: 3:40 PM (30 min before session)
-                    - **End Time**: 7:35 PM (30 min after session)
-                    - **Total Hours**: 3.9 hours
-                    """)
-                
-                # Show break analysis
-                st.markdown("#### 🚫 Break Analysis")
-                break_slots = 0
-                for _, row in template_df.iterrows():
-                    if 'brk' in template_df.columns and pd.notna(row['brk']) and str(row['brk']).strip() != '':
-                        break_slots += 1
-                
-                if break_slots > 0:
-                    st.warning(f"⚠️ {break_slots} break slots detected. Consider reducing breaks for better coverage.")
-                else:
-                    st.success("✅ No excessive breaks detected. Good coverage distribution.")
+                # Option to switch to manual entry
+                if st.button("Switch to Manual Entry", type="secondary"):
+                    st.session_state.use_template_analysis = False
+                    st.rerun()
+                    
             else:
-                st.warning("Please upload a template first to analyze.")
+                st.warning("⚠️ No template analysis suggestions available. Please run template analysis first or use default session times.")
+                st.info("💡 **Tip**: Go to Instructor Management → Template Analysis tab to generate suggestions.")
+                
+                # Fallback to manual entry
+                input_method = "Use Default Session Times"
         
-        if st.button("Continue to Step 3", type="primary"):
-            availability_df = pd.DataFrame(instructor_data)
-            st.session_state['availability_df'] = availability_df
+        if input_method == "Use Default Session Times":
+            st.markdown("#### 📝 Manual Instructor Entry")
             
-            # Show preview
-            st.markdown("### 📋 Instructor Preview")
-            st.dataframe(availability_df, height=300)
+            num_instructors = st.number_input(
+                "Number of Instructors",
+                min_value=1,
+                max_value=20,
+                value=3,
+                help="How many instructors do you want to add?"
+            )
+
+            instructor_data = []
             
-            # Create availability chart
-            create_availability_chart(availability_df)
+            for i in range(num_instructors):
+                st.markdown(f"### Instructor {i+1}")
+                
+                # Get available instructor names from Firebase
+                from firebase_config import firebase_manager
+                firebase_instructors = firebase_manager.get_instructors(st.session_state.get('user_id'))
+                available_instructors = [instructor_info.get('name', 'Unknown') for instructor_info in firebase_instructors.values()]
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    # Instructor selection with manual typing capability
+                    
+                    # Show dropdown for quick selection
+                    st.markdown("**Quick Select from Saved Profiles:**")
+                    selected_profile = st.selectbox(
+                        f"Select from profiles (optional)", 
+                        ["None"] + available_instructors,
+                        key=f"profile_{i}",
+                        help="Choose from saved profiles or type manually below"
+                    )
+                    
+                    # Manual name input (always available)
+                    st.markdown("**Enter Instructor Name:**")
+                    if selected_profile == "None":
+                        name = st.text_input(f"Name", key=f"name_{i}", placeholder="Enter instructor name")
+                    else:
+                        # Pre-fill with selected profile but allow editing
+                        name = st.text_input(f"Name", value=selected_profile, key=f"name_{i}", 
+                                           placeholder="Enter instructor name or edit selected name")
+                    
+                    start_time = st.time_input(
+                        f"{session_mode} Start Time", 
+                        key=f"start_{i}",
+                        value=default_start_time,
+                        help=f"Default: 30 minutes before {session_mode} session starts"
+                    )
+                
+                with col2:
+                    end_time = st.time_input(
+                        f"{session_mode} End Time", 
+                        key=f"end_{i}",
+                        value=default_end_time,
+                        help=f"Default: 30 minutes after {session_mode} session ends"
+                    )
+                    role = st.selectbox(f"Role", ["Instructor", "Shadow"], key=f"role_{i}")
+                
+                # Class preferences with checkboxes
+                st.markdown("#### 🚫 Classes They Can't Teach")
+                
+                # Get instructor profile if selected
+                instructor_profile = None
+                if selected_profile != "None":
+                    for instructor_info in firebase_instructors.values():
+                        if instructor_info.get('name') == selected_profile:
+                            instructor_profile = instructor_info
+                            break
+                
+                available_classes = [
+                    "Starters", "P1", "P2", "P3", "Y1", "Y2", "Y3", "PSL",
+                    "STRK4", "STRK5", "STRK6", "TN BCS AD BCS", "TN STRK AD STRK",
+                    "TN/AD BSCS", "TN/AD STRKS", "CNDTNG"
+                ]
+                cant_teach_classes = []
+                
+                # Create checkboxes in a grid layout
+                st.markdown("Select all classes this instructor cannot teach:")
+                
+                # Use columns for layout instead of container parameter
+                cols = st.columns(4)
+                for j, class_name in enumerate(available_classes):
+                    col_idx = j % 4
+                    
+                    # Pre-check if this class is in instructor's profile
+                    is_checked = False
+                    if instructor_profile and class_name in instructor_profile.get('cant_teach', []):
+                        is_checked = True
+                    
+                    with cols[col_idx]:
+                        if st.checkbox(class_name, value=is_checked, key=f"cant_teach_{i}_{class_name}"):
+                            cant_teach_classes.append(class_name)
+                
+                # Convert list to string for compatibility with existing code
+                cant_teach_str = ", ".join(cant_teach_classes) if cant_teach_classes else ""
+
+                instructor_data.append({
+                    "Name": name,
+                    "AM Start": start_time,
+                    "AM End": end_time,
+                    "Can't Teach": cant_teach_str,
+                    "Role": role
+                })
+
+                        # Template analysis button
+            if st.button("📊 Analyze Template Requirements", type="secondary"):
+                if 'am_template_df' in st.session_state and st.session_state['am_template_df'] is not None:
+                    template_df = st.session_state['am_template_df']
+                    
+                    st.markdown("### 📊 Template Analysis Results")
+                    
+                    # Count classes
+                    class_columns = [col for col in template_df.columns if col not in ['Time', 'brk']]
+                    total_classes = 0
+                    time_slots = len(template_df)
+                    
+                    for col in class_columns:
+                        for _, row in template_df.iterrows():
+                            if pd.notna(row[col]) and str(row[col]).strip() != '':
+                                total_classes += 1
+                    
+                    # Calculate recommendations
+                    recommended_instructors = max(3, total_classes // 3)  # At least 3, or 1 per 3 classes
+                    
+                    # Show analysis
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Total Classes", total_classes)
+                    with col2:
+                        st.metric("Time Slots", time_slots)
+                    with col3:
+                        st.metric("Recommended Instructors", recommended_instructors)
+                    
+                    # Show class breakdown
+                    st.markdown("#### 📊 Class Breakdown")
+                    class_counts = {}
+                    for col in class_columns:
+                        count = 0
+                        for _, row in template_df.iterrows():
+                            if pd.notna(row[col]) and str(row[col]).strip() != '':
+                                count += 1
+                        if count > 0:
+                            class_counts[col] = count
+                    
+                    if class_counts:
+                        class_df = pd.DataFrame(list(class_counts.items()), columns=['Class Type', 'Count'])
+                        st.dataframe(class_df, use_container_width=True)
+                    
+                    # Show availability recommendations
+                    st.markdown("#### ⏰ Recommended Availability")
+                    session_mode = st.session_state.get('session_mode', 'AM')
+                    if session_mode == "AM":
+                        st.markdown("**AM Session (8:35-12:10)**")
+                        st.markdown("""
+                        - **Start Time**: 8:05 AM (30 min before session)
+                        - **End Time**: 12:40 PM (30 min after session)
+                        - **Total Hours**: 4.5 hours
+                        """)
+                    else:
+                        st.markdown("**PM Session (4:10-7:05)**")
+                        st.markdown("""
+                        - **Start Time**: 3:40 PM (30 min before session)
+                        - **End Time**: 7:35 PM (30 min after session)
+                        - **Total Hours**: 3.9 hours
+                        """)
+                    
+                    # Show break analysis
+                    st.markdown("#### 🚫 Break Analysis")
+                    break_slots = 0
+                    for _, row in template_df.iterrows():
+                        if 'brk' in template_df.columns and pd.notna(row['brk']) and str(row['brk']).strip() != '':
+                            break_slots += 1
+                    
+                    if break_slots > 0:
+                        st.warning(f"⚠️ {break_slots} break slots detected. Consider reducing breaks for better coverage.")
+                    else:
+                        st.success("✅ No excessive breaks detected. Good coverage distribution.")
+                else:
+                    st.warning("Please upload a template first to analyze.")
             
-            st.session_state.current_step = 3
-            st.rerun()
+            if st.button("Continue to Step 3", type="primary"):
+                availability_df = pd.DataFrame(instructor_data)
+                st.session_state['availability_df'] = availability_df
+                
+                # Show preview
+                st.markdown("### 📋 Instructor Preview")
+                st.dataframe(availability_df, height=300)
+                
+                # Create availability chart
+                create_availability_chart(availability_df)
+                
+                st.session_state.current_step = 3
+                st.rerun()
         
         # Add reset button
         if st.button("🔄 Start Over", type="secondary"):
@@ -931,7 +1072,33 @@ def show_instructor_management():
                         st.markdown(f"**Can't Teach:** {', '.join(instructor.get('cant_teach', [])) if instructor.get('cant_teach') else 'None'}")
                         
                         if instructor.get('default_start_time') and instructor.get('default_end_time'):
-                            st.markdown(f"**Default Times:** {instructor['default_start_time']} - {instructor['default_end_time']}")
+                            # Convert 24-hour format to 12-hour format for display
+                            start_time_str = instructor['default_start_time']
+                            end_time_str = instructor['default_end_time']
+                            
+                            # Parse and format start time
+                            try:
+                                if ':' in start_time_str:
+                                    hour, minute = map(int, start_time_str.split(':'))
+                                    start_dt = datetime.combine(datetime.today(), time(hour, minute))
+                                    start_display = start_dt.strftime("%I:%M %p").lstrip("0")
+                                else:
+                                    start_display = start_time_str
+                            except:
+                                start_display = start_time_str
+                            
+                            # Parse and format end time
+                            try:
+                                if ':' in end_time_str:
+                                    hour, minute = map(int, end_time_str.split(':'))
+                                    end_dt = datetime.combine(datetime.today(), time(hour, minute))
+                                    end_display = end_dt.strftime("%I:%M %p").lstrip("0")
+                                else:
+                                    end_display = end_time_str
+                            except:
+                                end_display = end_time_str
+                            
+                            st.markdown(f"**Default Times:** {start_display} - {end_display}")
                         
                         # Show schedule access info if instructor has email
                         if instructor.get('email'):
@@ -969,14 +1136,41 @@ def show_instructor_management():
                 edit_role = st.selectbox("Role", ["Instructor", "Shadow"], index=0 if instructor.get('role') == "Instructor" else 1, key="edit_role")
             
             with col2:
+                # Parse default times for display
+                try:
+                    if instructor.get('default_start_time'):
+                        start_time_str = instructor['default_start_time']
+                        if ':' in start_time_str:
+                            hour, minute = map(int, start_time_str.split(':'))
+                            edit_start_default = time(hour, minute)
+                        else:
+                            edit_start_default = default_start_time
+                    else:
+                        edit_start_default = default_start_time
+                except:
+                    edit_start_default = default_start_time
+                
+                try:
+                    if instructor.get('default_end_time'):
+                        end_time_str = instructor['default_end_time']
+                        if ':' in end_time_str:
+                            hour, minute = map(int, end_time_str.split(':'))
+                            edit_end_default = time(hour, minute)
+                        else:
+                            edit_end_default = default_end_time
+                    else:
+                        edit_end_default = default_end_time
+                except:
+                    edit_end_default = default_end_time
+                
                 edit_start = st.time_input(
                     f"{session_mode} Start Time",
-                    value=time.fromisoformat(instructor.get('default_start_time', '08:05:00')) if instructor.get('default_start_time') else default_start_time,
+                    value=edit_start_default,
                     key="edit_start"
                 )
                 edit_end = st.time_input(
                     f"{session_mode} End Time",
-                    value=time.fromisoformat(instructor.get('default_end_time', '12:40:00')) if instructor.get('default_end_time') else default_end_time,
+                    value=edit_end_default,
                     key="edit_end"
                 )
             
@@ -1086,8 +1280,16 @@ def show_instructor_management():
                 st.error("Please enter a name for the instructor.")
     
     with tab3:
-        st.markdown("### 📊 Template Analysis")
-        st.markdown("Upload a template to analyze instructor requirements and recommendations.")
+        st.markdown("### 📊 Advanced Template Analysis")
+        st.markdown("Upload a template to analyze instructor requirements and get optimized availability suggestions.")
+        
+        # Session mode selection for analysis
+        analysis_session_mode = st.radio(
+            "Session Mode for Analysis",
+            ["AM", "PM"],
+            horizontal=True,
+            help="AM: 8:35-12:10, PM: 4:10-7:05"
+        )
         
         uploaded_template = st.file_uploader(
             "Upload Template for Analysis",
@@ -1100,30 +1302,305 @@ def show_instructor_management():
                 # Read the template
                 template_df = pd.read_excel(uploaded_template, engine="openpyxl")
                 
-                # Analyze the template
+                # Enhanced template analysis
                 st.markdown("#### 📋 Template Analysis Results")
                 
-                # Count classes
+                # Count classes and analyze time slots
                 class_columns = [col for col in template_df.columns if col not in ['Time', 'brk']]
                 total_classes = 0
                 time_slots = len(template_df)
                 
-                for col in class_columns:
-                    for _, row in template_df.iterrows():
+                # Analyze each time slot for concurrent classes
+                time_slot_analysis = []
+                for idx, row in template_df.iterrows():
+                    time_slot = row.get('Time', f'Slot {idx+1}')
+                    concurrent_classes = 0
+                    classes_in_slot = []
+                    
+                    for col in class_columns:
                         if pd.notna(row[col]) and str(row[col]).strip() != '':
+                            concurrent_classes += 1
+                            classes_in_slot.append(col)
                             total_classes += 1
+                    
+                    time_slot_analysis.append({
+                        'Time': time_slot,
+                        'Concurrent_Classes': concurrent_classes,
+                        'Classes': classes_in_slot
+                    })
                 
-                # Calculate recommendations
-                recommended_instructors = max(3, total_classes // 3)  # At least 3, or 1 per 3 classes
+                # Find peak requirements
+                peak_concurrent = max([slot['Concurrent_Classes'] for slot in time_slot_analysis])
+                first_slot_instructors = time_slot_analysis[0]['Concurrent_Classes'] if time_slot_analysis else 0
+                last_slot_instructors = time_slot_analysis[-1]['Concurrent_Classes'] if time_slot_analysis else 0
                 
                 # Show analysis
-                col1, col2, col3 = st.columns(3)
+                col1, col2, col3, col4 = st.columns(4)
                 with col1:
                     st.metric("Total Classes", total_classes)
                 with col2:
-                    st.metric("Time Slots", time_slots)
+                    st.metric("Peak Instructors Needed", peak_concurrent)
                 with col3:
-                    st.metric("Recommended Instructors", recommended_instructors)
+                    st.metric("Instructors at Start", first_slot_instructors)
+                with col4:
+                    st.metric("Instructors at End", last_slot_instructors)
+                
+                # Show time slot breakdown
+                st.markdown("#### ⏰ Time Slot Analysis")
+                time_analysis_df = pd.DataFrame(time_slot_analysis)
+                st.dataframe(time_analysis_df[['Time', 'Concurrent_Classes']], use_container_width=True)
+                
+                # Enhanced availability suggestions
+                st.markdown("#### 🎯 Optimized Instructor Availability Suggestions")
+                
+                # Get existing instructors from Firebase
+                from firebase_config import firebase_manager
+                firebase_instructors = firebase_manager.get_instructors(st.session_state.get('user_id'))
+                
+                if firebase_instructors:
+                    st.success(f"✅ Found {len(firebase_instructors)} existing instructors to work with")
+                    
+                    # Calculate optimal instructor distribution
+                    suggested_instructors = calculate_optimal_instructor_schedule(
+                        time_slot_analysis, 
+                        firebase_instructors, 
+                        analysis_session_mode
+                    )
+                    
+                    # Debug: Show what we got
+                    st.write(f"🔍 Debug: Got {len(suggested_instructors) if suggested_instructors else 0} suggestions from calculate_optimal_instructor_schedule")
+                    if suggested_instructors:
+                        st.write(f"🔍 First suggestion: {suggested_instructors[0]}")
+                    
+                    # Display editable suggestions table
+                    st.markdown("#### 📅 Editable Instructor Schedule")
+                    st.markdown("**Modify the suggestions below, then use the 'Apply to Schedule Generation' button to auto-populate Step 2.**")
+                    
+                    # Create editable table for instructor suggestions
+                    if suggested_instructors:
+                        # Initialize session state for editable suggestions if not exists
+                        if 'editable_suggestions' not in st.session_state:
+                            st.session_state.editable_suggestions = suggested_instructors.copy()
+                        
+                        # Create editable table
+                        edited_suggestions = []
+                        
+                        for i, suggestion in enumerate(st.session_state.editable_suggestions):
+                            st.markdown(f"---")
+                            st.markdown(f"**Instructor {i+1}**")
+                            
+                            col1, col2, col3, col4 = st.columns(4)
+                            
+                            with col1:
+                                # Instructor selection dropdown
+                                available_names = [instructor_data.get('name', 'Unknown') for instructor_data in firebase_instructors.values()]
+                                selected_name = st.selectbox(
+                                    "Instructor",
+                                    available_names,
+                                    index=available_names.index(suggestion['name']) if suggestion['name'] in available_names else 0,
+                                    key=f"instructor_name_{i}"
+                                )
+                            
+                            with col2:
+                                # Role selection
+                                selected_role = st.selectbox(
+                                    "Role",
+                                    ["Instructor", "Shadow"],
+                                    index=0 if suggestion['role'] == "Instructor" else 1,
+                                    key=f"instructor_role_{i}"
+                                )
+                            
+                            with col3:
+                                # Start time
+                                start_time_str = suggestion['suggested_start']
+                                start_hour, start_minute = parse_time_string(start_time_str)
+                                start_time = st.time_input(
+                                    "Start Time",
+                                    value=time(start_hour, start_minute),
+                                    key=f"instructor_start_{i}"
+                                )
+                                # Display the time in 12-hour format
+                                start_display = start_time.strftime("%I:%M %p").lstrip("0")
+                                st.markdown(f"**Display:** {start_display}")
+                            
+                            with col4:
+                                # End time
+                                end_time_str = suggestion['suggested_end']
+                                end_hour, end_minute = parse_time_string(end_time_str)
+                                end_time = st.time_input(
+                                    "End Time",
+                                    value=time(end_hour, end_minute),
+                                    key=f"instructor_end_{i}"
+                                )
+                                # Display the time in 12-hour format
+                                end_display = end_time.strftime("%I:%M %p").lstrip("0")
+                                st.markdown(f"**Display:** {end_display}")
+                            
+                            # Store edited suggestion
+                            edited_suggestions.append({
+                                'name': selected_name,
+                                'role': selected_role,
+                                'suggested_start': start_time.strftime("%I:%M %p"),
+                                'suggested_end': end_time.strftime("%I:%M %p"),
+                                'classes_covered': suggestion.get('classes_covered', []),
+                                'efficiency': suggestion.get('efficiency', 0)
+                            })
+                        
+                        # Update session state with edited suggestions
+                        st.session_state.editable_suggestions = edited_suggestions
+                        
+                        # Show efficiency summary
+                        st.markdown("---")
+                        st.markdown("#### 📊 Efficiency Summary")
+                        total_efficiency = sum(s.get('efficiency', 0) for s in edited_suggestions)
+                        avg_efficiency = total_efficiency / len(edited_suggestions) if edited_suggestions else 0
+                        st.metric("Average Efficiency", f"{avg_efficiency:.1f}%")
+                        
+                        # Apply to schedule generation button
+                        st.markdown("---")
+                        col1, col2 = st.columns([1, 1])
+                        
+                        with col1:
+                            if st.button("🔄 Reset to Original Suggestions", type="secondary"):
+                                st.session_state.editable_suggestions = suggested_instructors.copy()
+                                st.rerun()
+                        
+                        with col2:
+                            if st.button("🚀 Apply to Schedule Generation", type="primary"):
+                                # Store the edited suggestions for use in schedule generation
+                                st.session_state.template_analysis_suggestions = edited_suggestions.copy()
+                                st.session_state.use_template_analysis = True
+                                st.success("✅ Suggestions saved! You can now go to Schedule Generator Step 2 and select 'Use Template Analysis Results'.")
+                    else:
+                        # Fallback: Generate basic suggestions if the function failed
+                        st.warning("⚠️ Could not generate optimized suggestions. Creating basic suggestions instead.")
+                        
+                        # Create basic suggestions based on session mode
+                        basic_suggestions = []
+                        for i, (instructor_id, instructor_data) in enumerate(firebase_instructors.items()):
+                            if analysis_session_mode == "AM":
+                                start_time = "8:05 AM"
+                                end_time = "12:40 PM"
+                            else:  # PM
+                                start_time = "3:40 PM"
+                                end_time = "7:35 PM"
+                            
+                            basic_suggestions.append({
+                                'name': instructor_data.get('name', f'Instructor {i+1}'),
+                                'role': instructor_data.get('role', 'Instructor'),
+                                'suggested_start': start_time,
+                                'suggested_end': end_time,
+                                'classes_covered': [],
+                                'efficiency': 50.0
+                            })
+                        
+                        # Initialize session state for editable suggestions
+                        if 'editable_suggestions' not in st.session_state:
+                            st.session_state.editable_suggestions = basic_suggestions.copy()
+                        
+                        # Create editable table for basic suggestions
+                        edited_suggestions = []
+                        
+                        for i, suggestion in enumerate(st.session_state.editable_suggestions):
+                            st.markdown(f"---")
+                            st.markdown(f"**Instructor {i+1}**")
+                            
+                            col1, col2, col3, col4 = st.columns(4)
+                            
+                            with col1:
+                                # Instructor selection dropdown
+                                available_names = [instructor_data.get('name', 'Unknown') for instructor_data in firebase_instructors.values()]
+                                selected_name = st.selectbox(
+                                    "Instructor",
+                                    available_names,
+                                    index=available_names.index(suggestion['name']) if suggestion['name'] in available_names else 0,
+                                    key=f"basic_instructor_name_{i}"
+                                )
+                            
+                            with col2:
+                                # Role selection
+                                selected_role = st.selectbox(
+                                    "Role",
+                                    ["Instructor", "Shadow"],
+                                    index=0 if suggestion['role'] == "Instructor" else 1,
+                                    key=f"basic_instructor_role_{i}"
+                                )
+                            
+                            with col3:
+                                # Start time
+                                start_time_str = suggestion['suggested_start']
+                                start_hour, start_minute = parse_time_string(start_time_str)
+                                start_time = st.time_input(
+                                    "Start Time",
+                                    value=time(start_hour, start_minute),
+                                    key=f"basic_instructor_start_{i}"
+                                )
+                                # Display the time in 12-hour format
+                                start_display = start_time.strftime("%I:%M %p").lstrip("0")
+                                st.markdown(f"**Display:** {start_display}")
+                            
+                            with col4:
+                                # End time
+                                end_time_str = suggestion['suggested_end']
+                                end_hour, end_minute = parse_time_string(end_time_str)
+                                end_time = st.time_input(
+                                    "End Time",
+                                    value=time(end_hour, end_minute),
+                                    key=f"basic_instructor_end_{i}"
+                                )
+                                # Display the time in 12-hour format
+                                end_display = end_time.strftime("%I:%M %p").lstrip("0")
+                                st.markdown(f"**Display:** {end_display}")
+                            
+                            # Store edited suggestion
+                            edited_suggestions.append({
+                                'name': selected_name,
+                                'role': selected_role,
+                                'suggested_start': start_time.strftime("%I:%M %p").lstrip("0"),
+                                'suggested_end': end_time.strftime("%I:%M %p").lstrip("0"),
+                                'classes_covered': [],
+                                'efficiency': 50.0
+                            })
+                        
+                        # Update session state with edited suggestions
+                        st.session_state.editable_suggestions = edited_suggestions
+                        
+                        # Apply to schedule generation button
+                        st.markdown("---")
+                        col1, col2 = st.columns([1, 1])
+                        
+                        with col1:
+                            if st.button("🔄 Reset to Basic Suggestions", type="secondary"):
+                                st.session_state.editable_suggestions = basic_suggestions.copy()
+                                st.rerun()
+                        
+                        with col2:
+                            if st.button("🚀 Apply to Schedule Generation", type="primary"):
+                                # Store the edited suggestions for use in schedule generation
+                                st.session_state.template_analysis_suggestions = edited_suggestions.copy()
+                                st.session_state.use_template_analysis = True
+                                st.success("✅ Basic suggestions saved! You can now go to Schedule Generator Step 2 and select 'Use Template Analysis Results'.")
+                else:
+                    st.warning("⚠️ No existing instructors found. Add instructors first for personalized suggestions.")
+                    
+                    # Show generic suggestions based on peak analysis
+                    st.markdown("#### 📅 Generic Instructor Suggestions")
+                    
+                    # Calculate generic suggestions
+                    generic_suggestions = calculate_generic_instructor_schedule(
+                        time_slot_analysis, 
+                        analysis_session_mode
+                    )
+                    
+                    for i, suggestion in enumerate(generic_suggestions):
+                        with st.expander(f"👤 Instructor {i+1} - {suggestion['role']}", expanded=True):
+                            col1, col2, col3 = st.columns(3)
+                            with col1:
+                                st.markdown(f"**Suggested Start:** {suggestion['suggested_start']}")
+                            with col2:
+                                st.markdown(f"**Suggested End:** {suggestion['suggested_end']}")
+                            with col3:
+                                st.markdown(f"**Classes Covered:** {', '.join(suggestion['classes_covered'])}")
                 
                 # Show class breakdown
                 st.markdown("#### 📊 Class Breakdown")
@@ -1140,22 +1617,17 @@ def show_instructor_management():
                     class_df = pd.DataFrame(list(class_counts.items()), columns=['Class Type', 'Count'])
                     st.dataframe(class_df, use_container_width=True)
                 
-                # Show availability recommendations
-                st.markdown("#### ⏰ Recommended Availability")
-                if session_mode == "AM":
-                    st.markdown("**AM Session (8:35-12:10)**")
-                    st.markdown("""
-                    - **Start Time**: 8:05 AM (30 min before session)
-                    - **End Time**: 12:40 PM (30 min after session)
-                    - **Total Hours**: 4.5 hours
-                    """)
+                # Show efficiency recommendations
+                st.markdown("#### 💡 Efficiency Recommendations")
+                
+                if peak_concurrent > len(firebase_instructors) if firebase_instructors else 0:
+                    st.error(f"❌ **Staffing Gap**: Need {peak_concurrent} instructors at peak, but only have {len(firebase_instructors) if firebase_instructors else 0}")
+                    st.markdown("**Recommendations:**")
+                    st.markdown("- Add more instructors to your profile")
+                    st.markdown("- Consider reducing concurrent classes")
+                    st.markdown("- Extend instructor availability windows")
                 else:
-                    st.markdown("**PM Session (4:10-7:05)**")
-                    st.markdown("""
-                    - **Start Time**: 3:40 PM (30 min before session)
-                    - **End Time**: 7:35 PM (30 min after session)
-                    - **Total Hours**: 3.9 hours
-                    """)
+                    st.success(f"✅ **Staffing Adequate**: Have enough instructors for peak demand")
                 
                 # Show break analysis
                 st.markdown("#### 🚫 Break Analysis")
@@ -1171,6 +1643,7 @@ def show_instructor_management():
                 
             except Exception as e:
                 st.error(f"Error analyzing template: {str(e)}")
+                st.error(f"Technical details: {str(e)}")
 
 def show_ai_assistant():
     """Show the AI assistant chatbot"""
@@ -1397,6 +1870,29 @@ def show_help():
         - Download issues: Clear browser cache and try again
         """)
 
+def format_schedule_display(schedule_df):
+    """Format schedule DataFrame for better display"""
+    if not schedule_df.empty:
+        # Ensure Time column is first
+        if 'Time' in schedule_df.columns:
+            cols = ['Time'] + [col for col in schedule_df.columns if col != 'Time']
+            schedule_df = schedule_df[cols]
+        
+        # Clean up the data for better display
+        for col in schedule_df.columns:
+            schedule_df[col] = schedule_df[col].fillna('').astype(str)
+            # Replace empty strings and None values with a dash for better visibility
+            schedule_df[col] = schedule_df[col].replace('', '-')
+            schedule_df[col] = schedule_df[col].replace('None', '-')
+            schedule_df[col] = schedule_df[col].replace(' ', '-')
+            # Remove any remaining 'None' strings
+            schedule_df[col] = schedule_df[col].replace('nan', '-')
+            # Replace 'unfilled' with a more visually appealing indicator
+            schedule_df[col] = schedule_df[col].replace('unfilled', '⏳')
+        
+        return schedule_df
+    return schedule_df
+
 def show_employee_schedule_view():
     """Show employee schedule view with posted schedule"""
     st.markdown("## 📋 Current Schedule")
@@ -1417,8 +1913,74 @@ def show_employee_schedule_view():
         
         # Convert schedule data to DataFrame
         if 'schedule_data' in schedule_info:
-            schedule_df = pd.DataFrame(schedule_info['schedule_data'])
-            st.dataframe(schedule_df, use_container_width=True)
+            schedule_data = schedule_info['schedule_data']
+            
+            # Check if the data is in the expected format
+            if isinstance(schedule_data, list) and len(schedule_data) > 0:
+                # Check if the first item is a dictionary (expected format)
+                if isinstance(schedule_data[0], dict):
+                    # Convert to DataFrame
+                    schedule_df = pd.DataFrame(schedule_data)
+                else:
+                    # Data is in tuple format, need to convert
+                    # Converting schedule data...
+                    
+                                                                                                    
+                    # Convert tuple data to dictionary format
+                    converted_data = []
+                    column_names = ['Time', 'Starters', 'P1', 'P2', 'P3', 'Y1', 'Y2', 'Y3', 'PSL', 'STRK4', 'STRK5', 'STRK6', 'TN/AD BSCS', 'TN/AD STRKS', 'CNDTNG', 'brk']
+                    
+                    for i, row in enumerate(schedule_data):
+                        if isinstance(row, str):
+                            try:
+                                # Use safe_eval_tuple to convert string representation back to tuple
+                                tuple_data = safe_eval_tuple(row)
+                                
+                                if isinstance(tuple_data, tuple) and len(tuple_data) >= 16:
+                                    row_dict = {}
+                                    
+                                    for j, col_name in enumerate(column_names):
+                                        if j < len(tuple_data):
+                                            value = tuple_data[j]
+                                            # Convert datetime.time objects to strings in 12-hour format
+                                            if hasattr(value, 'strftime') and hasattr(value, 'hour') and hasattr(value, 'minute'):
+                                                # Convert to 12-hour format with AM/PM
+                                                dt = datetime.combine(datetime.today(), value)
+                                                value = dt.strftime("%I:%M %p").lstrip("0")
+                                            row_dict[col_name] = value
+                                        else:
+                                            row_dict[col_name] = None
+                                    
+                                    converted_data.append(row_dict)
+                            except Exception as e:
+                                st.error(f"Error converting schedule data: {e}")
+                                continue
+                    
+                    # Convert to DataFrame
+                    if converted_data:
+                        schedule_df = pd.DataFrame(converted_data)
+                    else:
+                        schedule_df = pd.DataFrame()
+            else:
+                st.error("❌ Schedule data is empty or not in list format")
+                schedule_df = pd.DataFrame()
+            
+            # Format the schedule display
+            st.markdown("### 📊 Schedule Table")
+            
+            # Format and display the schedule table
+            formatted_df = format_schedule_display(schedule_df)
+            if not formatted_df.empty:
+                st.dataframe(
+                    formatted_df, 
+                    use_container_width=True, 
+                    hide_index=True,
+                    column_config={
+                        "Time": st.column_config.TextColumn("⏰ Time", width="medium"),
+                    }
+                )
+            else:
+                st.warning("Schedule data is empty or in unexpected format")
             
             # Show employee-specific assignments
             employee_email = st.session_state.get('user_data', {}).get('email', '')
@@ -1505,8 +2067,71 @@ def show_employee_dashboard():
         
         # Convert schedule data to DataFrame
         if 'schedule_data' in schedule_info:
-            schedule_df = pd.DataFrame(schedule_info['schedule_data'])
-            st.dataframe(schedule_df, use_container_width=True)
+            schedule_data = schedule_info['schedule_data']
+            
+            # Check if the data is in the expected format
+            if isinstance(schedule_data, list) and len(schedule_data) > 0:
+                # Check if the first item is a dictionary (expected format)
+                if isinstance(schedule_data[0], dict):
+                    # Convert to DataFrame
+                    schedule_df = pd.DataFrame(schedule_data)
+                else:
+                    # Data is in tuple format, need to convert
+                                                                                                    
+                    # Convert tuple data to dictionary format
+                    converted_data = []
+                    column_names = ['Time', 'Starters', 'P1', 'P2', 'P3', 'Y1', 'Y2', 'Y3', 'PSL', 'STRK4', 'STRK5', 'STRK6', 'TN/AD BSCS', 'TN/AD STRKS', 'CNDTNG', 'brk']
+                    
+                    for i, row in enumerate(schedule_data):
+                        if isinstance(row, str):
+                            try:
+                                # Use safe_eval_tuple to convert string representation back to tuple
+                                tuple_data = safe_eval_tuple(row)
+                                
+                                if isinstance(tuple_data, tuple) and len(tuple_data) >= 16:
+                                    row_dict = {}
+                                    
+                                    for j, col_name in enumerate(column_names):
+                                        if j < len(tuple_data):
+                                            value = tuple_data[j]
+                                            # Convert datetime.time objects to strings in 12-hour format
+                                            if hasattr(value, 'strftime') and hasattr(value, 'hour') and hasattr(value, 'minute'):
+                                                # Convert to 12-hour format with AM/PM
+                                                dt = datetime.combine(datetime.today(), value)
+                                                value = dt.strftime("%I:%M %p").lstrip("0")
+                                            row_dict[col_name] = value
+                                        else:
+                                            row_dict[col_name] = None
+                                    
+                                    converted_data.append(row_dict)
+                            except Exception as e:
+                                st.error(f"Error converting schedule data: {e}")
+                                continue
+                    
+                    # Convert to DataFrame
+                    if converted_data:
+                        schedule_df = pd.DataFrame(converted_data)
+                    else:
+                        schedule_df = pd.DataFrame()
+            else:
+                schedule_df = pd.DataFrame()
+            
+            # Format the schedule display
+            st.markdown("### 📊 Schedule Table")
+            
+            # Format and display the schedule table
+            formatted_df = format_schedule_display(schedule_df)
+            if not formatted_df.empty:
+                st.dataframe(
+                    formatted_df, 
+                    use_container_width=True, 
+                    hide_index=True,
+                    column_config={
+                        "Time": st.column_config.TextColumn("⏰ Time", width="medium"),
+                    }
+                )
+            else:
+                st.warning("Schedule data is empty or in unexpected format")
             
             # Show employee-specific assignments
             employee_email = st.session_state.get('user_data', {}).get('email', '')
@@ -1569,6 +2194,256 @@ def show_employee_dashboard():
         })
         
         st.dataframe(demo_schedule, use_container_width=True)
+
+def calculate_optimal_instructor_schedule(time_slot_analysis, firebase_instructors, session_mode):
+    """Calculate optimal instructor availability based on time slot analysis and existing instructors"""
+    from datetime import timedelta
+    
+    # Debug: Show inputs
+    if hasattr(st, 'write'):
+        st.write(f"🔍 Debug: time_slot_analysis has {len(time_slot_analysis)} slots")
+        st.write(f"🔍 Debug: firebase_instructors has {len(firebase_instructors)} instructors")
+        st.write(f"🔍 Debug: session_mode is {session_mode}")
+    
+    # Convert time slots to datetime for easier manipulation
+    time_slots = []
+    for slot in time_slot_analysis:
+        time_str = str(slot['Time'])
+        try:
+            # Parse time string (e.g., "8:35", "9:10", etc.)
+            if ':' in time_str:
+                hour, minute = map(int, time_str.split(':'))
+                slot_time = datetime.combine(datetime.today(), time(hour, minute))
+                time_slots.append({
+                    'time': slot_time,
+                    'concurrent_classes': slot['Concurrent_Classes'],
+                    'classes': slot['Classes']
+                })
+        except Exception as e:
+            continue
+    
+    if not time_slots:
+        return []
+    
+    # Sort by time
+    time_slots.sort(key=lambda x: x['time'])
+    
+    # Calculate session boundaries
+    if session_mode == "AM":
+        session_start = datetime.combine(datetime.today(), time(8, 35))
+        session_end = datetime.combine(datetime.today(), time(12, 10))
+    else:  # PM
+        session_start = datetime.combine(datetime.today(), time(16, 10))  # 4:10 PM
+        session_end = datetime.combine(datetime.today(), time(19, 5))     # 7:05 PM
+    
+    # Find peak demand
+    peak_concurrent = max(slot['concurrent_classes'] for slot in time_slots)
+    
+    # Convert Firebase instructors to list
+    instructor_list = []
+    for instructor_id, instructor_data in firebase_instructors.items():
+        instructor_list.append({
+            'id': instructor_id,
+            'name': instructor_data.get('name', 'Unknown'),
+            'role': instructor_data.get('role', 'Instructor'),
+            'current_start': instructor_data.get('default_start_time', '08:05:00'),
+            'current_end': instructor_data.get('default_end_time', '12:40:00'),
+            'cant_teach': instructor_data.get('cant_teach', [])
+        })
+    
+    # Sort instructors by role (Instructors first, then Shadows)
+    instructor_list.sort(key=lambda x: x['role'] == 'Shadow')
+    
+    suggestions = []
+    
+    # Generate suggestions for all instructors
+    for i, instructor in enumerate(instructor_list):
+        # Always generate a suggestion for each instructor
+        # Use session boundaries as base times
+        if session_mode == "AM":
+            suggested_start = session_start - timedelta(minutes=30)  # 8:05 AM
+            suggested_end = session_end + timedelta(minutes=30)      # 12:40 PM
+        else:  # PM
+            suggested_start = session_start - timedelta(minutes=30)  # 3:40 PM
+            suggested_end = session_end + timedelta(minutes=30)      # 7:35 PM
+        
+        # Find time slots where this instructor would be most useful
+        # Prioritize high-demand slots first
+        high_demand_slots = [slot for slot in time_slots if slot['concurrent_classes'] >= max(1, peak_concurrent - i)]
+        
+        if high_demand_slots:
+            # Start 30 minutes before first high-demand slot
+            suggested_start = high_demand_slots[0]['time'] - timedelta(minutes=30)
+            
+            # End 30 minutes after last high-demand slot
+            suggested_end = high_demand_slots[-1]['time'] + timedelta(minutes=30)
+            
+            # Ensure within session boundaries
+            if suggested_start < session_start:
+                suggested_start = session_start - timedelta(minutes=30)
+            if suggested_end > session_end:
+                suggested_end = session_end + timedelta(minutes=30)
+            
+            # Calculate classes this instructor could cover
+            classes_covered = []
+            for slot in high_demand_slots:
+                for cls in slot['classes']:
+                    if cls not in instructor['cant_teach']:
+                        classes_covered.append(cls)
+            
+            # Remove duplicates
+            classes_covered = list(set(classes_covered))
+            
+            # Calculate efficiency percentage
+            total_time_minutes = (suggested_end - suggested_start).total_seconds() / 60
+            classes_per_hour = len(classes_covered) / (total_time_minutes / 60) if total_time_minutes > 0 else 0
+            efficiency = min(100, classes_per_hour * 10)  # Scale factor for reasonable percentages
+        else:
+            # Use default session times if no high-demand slots found
+            classes_covered = []
+            efficiency = 50.0  # Default efficiency
+        
+        suggestions.append({
+            'name': instructor['name'],
+            'role': instructor['role'],
+            'suggested_start': suggested_start.strftime("%I:%M %p").lstrip("0"),
+            'suggested_end': suggested_end.strftime("%I:%M %p").lstrip("0"),
+            'classes_covered': classes_covered,
+            'efficiency': efficiency
+        })
+    
+    return suggestions
+
+def calculate_generic_instructor_schedule(time_slot_analysis, session_mode):
+    """Calculate generic instructor suggestions when no existing instructors are available"""
+    from datetime import timedelta
+    
+    # Convert time slots to datetime for easier manipulation
+    time_slots = []
+    for slot in time_slot_analysis:
+        time_str = str(slot['Time'])
+        try:
+            if ':' in time_str:
+                hour, minute = map(int, time_str.split(':'))
+                slot_time = datetime.combine(datetime.today(), time(hour, minute))
+                time_slots.append({
+                    'time': slot_time,
+                    'concurrent_classes': slot['Concurrent_Classes'],
+                    'classes': slot['Classes']
+                })
+        except:
+            continue
+    
+    if not time_slots:
+        return []
+    
+    # Sort by time
+    time_slots.sort(key=lambda x: x['time'])
+    
+    # Calculate session boundaries
+    if session_mode == "AM":
+        session_start = datetime.combine(datetime.today(), time(8, 35))
+        session_end = datetime.combine(datetime.today(), time(12, 10))
+    else:  # PM
+        session_start = datetime.combine(datetime.today(), time(16, 10))  # 4:10 PM
+        session_end = datetime.combine(datetime.today(), time(19, 5))     # 7:05 PM
+    
+    # Find peak demand
+    peak_concurrent = max(slot['concurrent_classes'] for slot in time_slots)
+    
+    suggestions = []
+    
+    # Create generic suggestions based on peak demand
+    for i in range(peak_concurrent):
+        # Find time slots where this instructor would be most useful
+        high_demand_slots = [slot for slot in time_slots if slot['concurrent_classes'] >= peak_concurrent - i]
+        
+        if high_demand_slots:
+            # Start 30 minutes before first high-demand slot
+            suggested_start = high_demand_slots[0]['time'] - timedelta(minutes=30)
+            
+            # End 30 minutes after last high-demand slot
+            suggested_end = high_demand_slots[-1]['time'] + timedelta(minutes=30)
+            
+            # Ensure within session boundaries
+            if suggested_start < session_start:
+                suggested_start = session_start - timedelta(minutes=30)
+            if suggested_end > session_end:
+                suggested_end = session_end + timedelta(minutes=30)
+            
+            # Determine classes this instructor could cover
+            classes_covered = []
+            for slot in high_demand_slots:
+                classes_covered.extend(slot['classes'])
+            
+            # Remove duplicates
+            classes_covered = list(set(classes_covered))
+            
+            # Determine role based on position
+            role = "Instructor" if i < peak_concurrent - 1 else "Shadow"
+            
+            suggestions.append({
+                'name': f"Instructor {i+1}",
+                'role': role,
+                'suggested_start': suggested_start.strftime("%I:%M %p").lstrip("0"),
+                'suggested_end': suggested_end.strftime("%I:%M %p").lstrip("0"),
+                'classes_covered': classes_covered[:5],  # Limit to first 5 classes for display
+                'efficiency': 85 - (i * 5)  # Decreasing efficiency for each additional instructor
+            })
+    
+    return suggestions
+
+def parse_time_string(time_str):
+    """Parse time string like '8:05 AM' or '3:40 PM' and return hour, minute"""
+    try:
+        # Remove any extra spaces and convert to lowercase
+        time_str = time_str.strip().lower()
+        
+        # Handle different formats
+        if 'am' in time_str or 'pm' in time_str:
+            # Format like "8:05 AM" or "3:40 PM"
+            time_part = time_str.replace('am', '').replace('pm', '').strip()
+            hour, minute = map(int, time_part.split(':'))
+            
+            # Convert to 24-hour format for internal processing
+            if 'pm' in time_str and hour != 12:
+                hour += 12
+            elif 'am' in time_str and hour == 12:
+                hour = 0
+                
+            return hour, minute
+        else:
+            # Handle 12-hour format without AM/PM (like "3:40" or "8:05")
+            # We need to determine if it's AM or PM based on context
+            hour, minute = map(int, time_str.split(':'))
+            
+            # If hour is 1-7, assume PM for swim context (evening times)
+            # If hour is 8-11, assume AM (morning swim times)
+            # If hour is 12, assume PM (noon)
+            if hour >= 1 and hour <= 7:
+                hour += 12  # Convert to PM
+            elif hour == 12:
+                hour = 12  # Noon
+            # For 8-11, keep as AM (no conversion needed)
+                
+            return hour, minute
+    except:
+        # Default fallback - return reasonable default times
+        return 8, 5   # 8:05 AM
+
+def safe_eval_tuple(s):
+    """Safely evaluate a string representation of a tuple with datetime.time objects"""
+    try:
+        import re
+        # Replace datetime.time(hour, minute) with time(hour, minute) for safer eval
+        s = re.sub(r'datetime\.time\((\d+),\s*(\d+)\)', r'time(\1, \2)', s)
+        # Create a safe namespace with only the time function
+        safe_dict = {'time': time, 'None': None}
+        return eval(s, {"__builtins__": {}}, safe_dict)
+    except Exception as e:
+        if hasattr(st, 'write'):
+            st.write(f"Error in safe_eval_tuple: {e}")
+        return None
 
 # Run the main application
 if __name__ == "__main__":

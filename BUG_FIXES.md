@@ -2,6 +2,24 @@
 
 ## Latest Fixes (Latest Update)
 
+### ✅ Fixed: Schedule Posting Issues
+**Problem**: "Object of type time is not JSON serializable" error when posting schedules to Firebase.
+
+**Root Cause**: 
+- Schedule data contains `datetime.time` objects from Streamlit time inputs
+- Firebase requires JSON-serializable data
+- Time objects can't be directly serialized to JSON
+
+**Solution**:
+- Added `_convert_time_objects()` function to convert time objects to strings
+- Updated `post_schedule()` to convert all time objects before Firebase storage
+- Fixed home page schedule posting functionality
+- Enhanced error handling for schedule posting
+
+**Files Changed**:
+- `firebase_config.py`: Added time conversion function and updated posting logic
+- `app.py`: Fixed home page schedule posting functionality
+
 ### ✅ Fixed: Firebase Deployment Issues
 **Problem**: "Invalid database URL: None" error in Streamlit deployment and JWT signature errors.
 
@@ -88,8 +106,61 @@
 - ✅ Schedule generator working properly
 - ✅ Instructor management functional
 - ✅ Email verification working
-- ✅ Schedule posting with instructor notifications
+- ✅ Schedule posting with instructor notifications (FIXED)
+- ✅ Schedule retrieval working (FIXED)
 - ✅ Firebase integration stable
+
+### ✅ Fixed: Schedule Posting and Retrieval Issues (Latest)
+**Problem**: Schedule posting was failing with "Invalid data; couldn't parse JSON object, array, or value" error, and schedule retrieval wasn't working properly.
+
+**Root Cause**: 
+- Firebase Realtime Database was rejecting complex schedule data with empty strings and special characters
+- Data cleaning wasn't being applied properly
+- Schedule retrieval was working but needed proper instructor email matching
+
+**Solution**:
+- Added `_clean_data_for_firebase()` function to convert empty strings to spaces and clean special characters
+- Enhanced data validation and JSON serialization testing
+- Verified schedule retrieval works correctly with proper instructor email matching
+- Confirmed that simplified schedule structures work perfectly with Firebase
+
+**Files Changed**:
+- `firebase_config.py`: Added data cleaning function and enhanced error handling
+- Removed debug test files after confirming functionality
+
+**Testing Results**:
+- ✅ Firebase connection working
+- ✅ Instructor management working  
+- ✅ Simple schedule posting working
+- ✅ Schedule retrieval working with proper instructor emails
+- ✅ Complex schedules need data cleaning (handled automatically)
+
+### ✅ Fixed: Employee Schedule Display Formatting (Latest)
+**Problem**: Employee side was showing raw, unformatted schedule data (Python tuples with datetime.time objects) instead of a clean, readable table with proper class headers.
+
+**Root Cause**: 
+- Schedule data from Firebase was in tuple format instead of dictionary format
+- `datetime.time` objects were not being converted to readable strings
+- `None` values were being displayed as raw Python objects
+- No proper data conversion was happening before DataFrame creation
+
+**Solution**:
+- Added robust data conversion logic to handle both dictionary and tuple formats
+- Implemented `datetime.time` object conversion to readable time strings
+- Enhanced `format_schedule_display()` function to handle `None` values and empty strings
+- Added proper column name mapping for tuple data conversion
+- Applied the same conversion logic to both employee schedule view functions
+
+**Files Changed**:
+- `app.py`: Added data conversion logic and enhanced formatting function
+
+**Result**:
+- ✅ Employee schedules now display as clean, formatted tables
+- ✅ Class headers (Starters, P1, P2, P3, PSL, STRK4, etc.) are properly shown
+- ✅ Empty slots and None values show as dashes instead of raw Python objects
+- ✅ Time column shows readable time format (HH:MM) instead of datetime.time objects
+- ✅ Schedule is much more readable and professional-looking
+- ✅ Handles both dictionary and tuple data formats from Firebase
 
 ## Testing Checklist
 - [ ] Sign up as supervisor (check email verification)

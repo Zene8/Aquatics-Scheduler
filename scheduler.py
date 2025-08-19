@@ -10,7 +10,7 @@ import re
 def to_dt(time):
     if isinstance(time, str):
         time = time.strip().lower()
-        for fmt in ("%I%p", "%I:%M%p", "%H:%M:%S", "%H:%M"):
+        for fmt in ("%I%p", "%I:%M%p", "%H:%M:%S", "%H:%M", "%I:%M %p"):
             try:
                 return datetime.combine(datetime.today(), datetime.strptime(time, fmt).time())
             except ValueError:
@@ -18,8 +18,35 @@ def to_dt(time):
         raise ValueError(f"Unsupported time format: {time}")
     return datetime.combine(datetime.today(), time)
 
+def adjust_instructor_end_time(end_time):
+    """Adjust instructor end time to be 30 minutes before the actual end time"""
+    from datetime import timedelta
+    if isinstance(end_time, str):
+        # Parse the time string first
+        for fmt in ("%I%p", "%I:%M%p", "%H:%M:%S", "%H:%M", "%I:%M %p"):
+            try:
+                parsed_time = datetime.strptime(end_time.strip().lower(), fmt).time()
+                break
+            except ValueError:
+                continue
+        else:
+            return end_time  # Return original if parsing fails
+    else:
+        parsed_time = end_time
+    
+    # Convert to datetime for easier manipulation
+    dt = datetime.combine(datetime.today(), parsed_time)
+    # Subtract 30 minutes
+    adjusted_dt = dt - timedelta(minutes=30)
+    return adjusted_dt.time()
+
 def is_available(row, time):
-    return to_dt(row['AM Start']) <= to_dt(time) <= to_dt(row['AM End'])
+    start_time = to_dt(row['AM Start'])
+    end_time = to_dt(adjust_instructor_end_time(row['AM End']))
+    class_time = to_dt(time)
+    
+    # Check if the class time is within the instructor's adjusted availability window
+    return start_time <= class_time <= end_time
 
 def parse_cell_content(content):
     student_count = 0

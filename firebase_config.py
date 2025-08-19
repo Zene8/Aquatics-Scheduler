@@ -29,64 +29,140 @@ class FirebaseManager:
     
     def initialize_firebase(self):
         try:
+            print("🔍 Starting Firebase initialization...")
+            
             # Validate Firebase configuration
             required_keys = ['apiKey', 'authDomain', 'databaseURL', 'projectId']
             missing_keys = [key for key in required_keys if not FIREBASE_CONFIG.get(key)]
             
             if missing_keys:
-                st.error(f"❌ Missing required Firebase configuration keys: {missing_keys}")
-                st.stop()
+                error_msg = f"❌ Missing required Firebase configuration keys: {missing_keys}"
+                if hasattr(st, 'error'):
+                    st.error(error_msg)
+                    st.stop()
+                else:
+                    raise Exception(error_msg)
+            
+            print("✅ Firebase configuration validation passed")
             
             # Validate database URL
             if not FIREBASE_CONFIG.get('databaseURL'):
-                st.error("❌ Database URL is missing from Firebase configuration")
-                st.stop()
+                error_msg = "❌ Database URL is missing from Firebase configuration"
+                if hasattr(st, 'error'):
+                    st.error(error_msg)
+                    st.stop()
+                else:
+                    raise Exception(error_msg)
+            
+            print(f"✅ Database URL validated: {FIREBASE_CONFIG.get('databaseURL')}")
             
             # Initialize Pyrebase for authentication
+            print("🔍 Initializing Pyrebase...")
             import pyrebase
             self.firebase = pyrebase.initialize_app(FIREBASE_CONFIG)
             self.auth = self.firebase.auth()
+            print("✅ Pyrebase initialized successfully")
             
             # Initialize Firebase Admin SDK for database operations and auth verification
+            print("🔍 Importing Firebase Admin SDK...")
             import firebase_admin
             from firebase_admin import credentials, db, auth as admin_auth
+            print("✅ Firebase Admin SDK imported successfully")
             
             # Check if Firebase Admin is already initialized
             if not firebase_admin._apps:
+                print("🔍 Firebase Admin not initialized, initializing now...")
                 # Use service account credentials - try Streamlit secrets first, then local file
+                cred = None
                 try:
                     # Try to use Streamlit secrets (for deployment)
-                    if hasattr(st, 'secrets') and 'firebase' in st.secrets:
+                    secrets_available = False
+                    try:
+                        if hasattr(st, 'secrets') and st.secrets is not None and 'firebase' in st.secrets:
+                            secrets_available = True
+                    except:
+                        secrets_available = False
+                    
+                    if secrets_available:
+                        print("🔍 Using Streamlit secrets for Firebase credentials...")
                         sa = dict(st.secrets["firebase"])
                         cred = credentials.Certificate(sa)
-                        st.write("✅ Using Firebase credentials from Streamlit secrets")
+                        if hasattr(st, 'write'):
+                            st.write("✅ Using Firebase credentials from Streamlit secrets")
+                        else:
+                            print("✅ Using Firebase credentials from Streamlit secrets")
                     else:
                         # Fall back to local file (for development)
-                        cred = credentials.Certificate("serviceAccountKey.json")
-                        st.write("✅ Using Firebase credentials from local file")
+                        print("🔍 Using local service account key file...")
+                        try:
+                            cred = credentials.Certificate("serviceAccountKey.json")
+                            if hasattr(st, 'write'):
+                                st.write("✅ Using Firebase credentials from local file")
+                            else:
+                                print("✅ Using Firebase credentials from local file")
+                        except Exception as e:
+                            print(f"❌ Failed to load service account key: {e}")
+                            raise e
                 except Exception as e:
-                    st.error(f"❌ Failed to load Firebase credentials: {e}")
-                    st.error("For deployment: Add Firebase credentials to Streamlit secrets")
-                    st.error("For development: Ensure serviceAccountKey.json is in the project directory")
-                    st.stop()
+                    print(f"❌ Failed to load Firebase credentials: {e}")
+                    if hasattr(st, 'error'):
+                        st.error(f"❌ Failed to load Firebase credentials: {e}")
+                        st.error("For deployment: Add Firebase credentials to Streamlit secrets")
+                        st.error("For development: Ensure serviceAccountKey.json is in the project directory")
+                        st.stop()
+                    else:
+                        raise Exception(f"❌ Failed to load Firebase credentials: {e}")
                 
-                firebase_admin.initialize_app(cred, {
-                    'databaseURL': FIREBASE_CONFIG['databaseURL']
-                })
+                if cred is None:
+                    raise Exception("No Firebase credentials loaded")
+                
+                print(f"🔍 Initializing Firebase Admin with database URL: {FIREBASE_CONFIG['databaseURL']}")
+                try:
+                    firebase_admin.initialize_app(cred, {
+                        'databaseURL': FIREBASE_CONFIG['databaseURL']
+                    })
+                    print("✅ Firebase Admin app initialized")
+                except Exception as e:
+                    print(f"❌ Firebase Admin initialization failed: {e}")
+                    raise e
+            else:
+                print("✅ Firebase Admin already initialized")
             
             self.admin_db = db.reference()
             self.admin_auth = admin_auth
-            st.success("✅ Firebase Admin SDK connected successfully!")
+            
+            # Debug: Check if initialization was successful
+            if self.admin_db is None:
+                raise Exception("Firebase Admin SDK database reference is None")
+            if self.admin_auth is None:
+                raise Exception("Firebase Admin SDK auth reference is None")
+                
+            if hasattr(st, 'success'):
+                st.success("✅ Firebase Admin SDK connected successfully!")
+            else:
+                print("✅ Firebase Admin SDK connected successfully!")
             
         except ImportError as e:
-            st.error(f"❌ Firebase libraries not installed. Please run: pip install firebase-admin pyrebase4")
-            st.stop()
+            error_msg = f"❌ Firebase libraries not installed. Please run: pip install firebase-admin pyrebase4"
+            if hasattr(st, 'error'):
+                st.error(error_msg)
+                st.stop()
+            else:
+                raise Exception(error_msg)
         except FileNotFoundError:
-            st.error("❌ serviceAccountKey.json not found. Please ensure the service account key file is in the project directory.")
-            st.stop()
+            error_msg = "❌ serviceAccountKey.json not found. Please ensure the service account key file is in the project directory."
+            if hasattr(st, 'error'):
+                st.error(error_msg)
+                st.stop()
+            else:
+                raise Exception(error_msg)
         except Exception as e:
-            st.error(f"❌ Firebase initialization failed: {e}")
-            st.stop()
+            error_msg = f"❌ Firebase initialization failed: {e}"
+            if hasattr(st, 'error'):
+                st.error(error_msg)
+                st.stop()
+            else:
+                raise Exception(error_msg)
     
     def sign_up(self, email, password, role):
         """Create user account with email verification"""
@@ -213,12 +289,58 @@ class FirebaseManager:
             st.error(f"Failed to delete instructor: {e}")
             return False
     
+    def _convert_time_objects(self, obj):
+        """Convert datetime.time objects to strings for JSON serialization"""
+        if isinstance(obj, dict):
+            return {key: self._convert_time_objects(value) for key, value in obj.items()}
+        elif isinstance(obj, list):
+            return [self._convert_time_objects(item) for item in obj]
+        elif hasattr(obj, 'strftime') and hasattr(obj, 'hour') and hasattr(obj, 'minute'):
+            # This is a time object
+            return obj.strftime("%H:%M")
+        elif hasattr(obj, 'isoformat'):
+            # This is a datetime object
+            return obj.isoformat()
+        else:
+            return obj
+    
+    def _clean_data_for_firebase(self, data):
+        """Clean data to ensure Firebase compatibility"""
+        if isinstance(data, dict):
+            cleaned = {}
+            for key, value in data.items():
+                # Firebase doesn't like certain characters in keys
+                clean_key = str(key).replace('.', '_').replace('#', '_').replace('$', '_').replace('[', '_').replace(']', '_')
+                
+                if isinstance(value, dict):
+                    cleaned[clean_key] = self._clean_data_for_firebase(value)
+                elif isinstance(value, list):
+                    cleaned[clean_key] = [self._clean_data_for_firebase(item) for item in value]
+                elif value is None:
+                    cleaned[clean_key] = ""  # Convert None to empty string
+                elif value == "":
+                    cleaned[clean_key] = " "  # Convert empty string to space
+                else:
+                    cleaned[clean_key] = str(value)  # Convert everything to string
+            return cleaned
+        elif isinstance(data, list):
+            return [self._clean_data_for_firebase(item) for item in data]
+        elif data is None:
+            return ""
+        elif data == "":
+            return " "
+        else:
+            return str(data)
+    
     def post_schedule(self, schedule_data, supervisor_id):
         """Post schedule to database and return instructor emails"""
         try:
-            schedule_data["supervisor_id"] = supervisor_id
-            schedule_data["posted_at"] = datetime.now().isoformat()
-            schedule_data["is_active"] = True
+            # Convert time objects to strings for JSON serialization
+            serializable_data = self._convert_time_objects(schedule_data)
+            
+            serializable_data["supervisor_id"] = supervisor_id
+            serializable_data["posted_at"] = datetime.now().isoformat()
+            serializable_data["is_active"] = True
             
             # Get all instructor emails for this supervisor
             instructor_emails = []
@@ -232,11 +354,60 @@ class FirebaseManager:
                             instructor_emails.append(instructor_email)
             
             # Add instructor emails to schedule data
-            schedule_data["instructor_emails"] = instructor_emails
+            serializable_data["instructor_emails"] = instructor_emails
             
             # Add to Realtime Database using Admin SDK
-            self.admin_db.child("schedules").push(schedule_data)
-            return {"success": True, "instructor_emails": instructor_emails}
+            try:
+                # Debug: Print the data being sent to Firebase
+                print(f"🔍 Posting schedule data with {len(serializable_data)} keys")
+                print(f"🔍 Schedule data keys: {list(serializable_data.keys())}")
+                if 'schedule_data' in serializable_data:
+                    print(f"🔍 Schedule data rows: {len(serializable_data['schedule_data'])}")
+                
+                # Clean the data to ensure Firebase compatibility
+                cleaned_data = self._clean_data_for_firebase(serializable_data)
+                print(f"🔍 Data cleaned for Firebase compatibility")
+                
+                # Test the cleaned data
+                import json
+                try:
+                    json.dumps(cleaned_data)
+                    print("✅ Cleaned data is JSON serializable")
+                except Exception as e:
+                    print(f"❌ Cleaned data JSON error: {e}")
+                    raise e
+                
+                self.admin_db.child("schedules").push(cleaned_data)
+                return {"success": True, "instructor_emails": instructor_emails}
+            except Exception as e:
+                print(f"❌ Firebase push failed: {e}")
+                # Try to identify the problematic data
+                import json
+                try:
+                    json.dumps(serializable_data)
+                    print("✅ Data is JSON serializable")
+                except Exception as json_error:
+                    print(f"❌ JSON serialization error: {json_error}")
+                    # Try to find the problematic field
+                    for key, value in serializable_data.items():
+                        try:
+                            json.dumps({key: value})
+                        except:
+                            print(f"❌ Problematic field: {key}")
+                
+                # Try to identify the issue by examining the data structure
+                print("🔍 Examining schedule data structure...")
+                if 'schedule_data' in serializable_data:
+                    schedule_rows = serializable_data['schedule_data']
+                    for i, row in enumerate(schedule_rows):
+                        print(f"🔍 Row {i}: {list(row.keys())}")
+                        for key, value in row.items():
+                            if value is None or value == "":
+                                print(f"⚠️ Empty value in row {i}, key '{key}': {repr(value)}")
+                            elif isinstance(value, str) and len(value) > 100:
+                                print(f"⚠️ Long string in row {i}, key '{key}': {len(value)} chars")
+                
+                raise e
         except Exception as e:
             st.error(f"Failed to post schedule: {e}")
             return {"success": False, "error": str(e)}
